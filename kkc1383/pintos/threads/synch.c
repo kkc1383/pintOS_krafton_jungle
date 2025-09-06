@@ -175,13 +175,28 @@ void lock_init(struct lock *lock) {
    interrupt handler.  This function may be called with
    interrupts disabled, but interrupts will be turned back on if
    we need to sleep. */
-void lock_acquire(struct lock *lock) {
+void lock_acquire(struct lock *lock) { // P 함수의 wrapper, 해당 락을 점유하고있는 holder를 찾아가 donate
   ASSERT(lock != NULL);
   ASSERT(!intr_context());
   ASSERT(!lock_held_by_current_thread(lock));
 
-  sema_down(&lock->semaphore);
-  lock->holder = thread_current();
+  enum intr_level old_level =intr_disable();
+  struct thread* curr=thread_current();
+
+  if(lock->holder !=NULL && lock->holder->priority < curr->priority){ // 만약 내가 기다리는 락을 점유하는 holder의 우선순위가 나보다 낮을 경우
+    lock->holder->priority=curr->priority; // priority donate
+  }
+  curr->waiting_for_lock=lock;
+
+  intr_set_level(old_level);
+  sema_down(&lock->semaphore); // 여기서 block 당함
+
+  /* 락 획득 후 처리 */
+  old_level=intr_disable(); // 인터럽트 끄기(전역 데이터를 수정하기 때문에)
+  curr->waiting_for_lock=NULL; // 이젠 이 락에 대해선 안 기다리니까
+  lock->holder = curr; // 만약 뚫었다면 현재 스레드가 이 lock의 holder임
+  list_push_back(&curr->acquired_locks,&lock->holder_elem); // 보유중인 락에 추가 이건 순서 상관없음
+  intr_set_level(old_level); // 인터럽트 복원
 }
 
 /* Tries to acquires LOCK and returns true if successful or false
@@ -207,12 +222,37 @@ bool lock_try_acquire(struct lock *lock) {
    An interrupt handler cannot acquire a lock, so it does not
    make sense to try to release a lock within an interrupt
    handler. */
-void lock_release(struct lock *lock) {
+void lock_release(struct lock *lock) { // V함수의 wrapper
   ASSERT(lock != NULL);
   ASSERT(lock_held_by_current_thread(lock));
 
+  enum intr_level old_level=intr_disable();
+  struct thread *curr=thread_current();
+
+  //현재 쓰레드의 acquired locks에서 노드 제거
+  list_remove(&lock->holder_elem);
+
+  // 우선순위 복구 내가 가지고 있는 acquire lock 중에서 가장 큰 걸로 받아와야함
+  int new_priority=curr->original_priority;
+
+  struct list_elem* e; // acquired locks를 순회하면서 각각의 락
+  // 현재 스레드가 보유중인 락을 순회 하면서 각 락의 우선순위 최댓값을 new_priority로 함(물론 내 original이 높다면 그걸로 채택)
+  for(e=list_begin(&curr->acquired_locks);e!=list_end(&curr->acquired_locks);e=list_next(e)){
+    struct lock* other_lock=list_entry(e,struct lock, holder_elem);
+    
+    if(list_empty(&other_lock->semaphore.waiters)) continue; // 대기자가 없는 락은 pass
+
+    struct thread* front_thread=list_entry(list_front(&other_lock->semaphore.waiters),struct thread,elem);
+
+    if(front_thread->priority > new_priority) // 각 락의 우선순위 최댓값을 가지고 new_priority 갱신
+      new_priority=front_thread->priority;
+  }
+  curr->priority=new_priority; // 현재 스레드의 적절한 priority로 갱신
+  
+
   lock->holder = NULL;
-  sema_up(&lock->semaphore);
+  sema_up(&lock->semaphore); // 자원 1 공급해주고 waiter 중 우선순위 높은 쓰레드 unblock
+  intr_set_level(old_level);
 }
 
 /* Returns true if the current thread holds LOCK, false
