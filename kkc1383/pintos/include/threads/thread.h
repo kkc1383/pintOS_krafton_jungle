@@ -98,6 +98,10 @@ struct thread {
   int64_t wake_tick;           /* 쓰레드를 깨울 시간 */
   struct list_elem sleep_elem; /* sleep_list에서의 연결리스트 노드 */
 
+  int original_priority;      /* 원래 우선순위(기부 이전) */
+  struct list acquired_locks; /* 현재 보유(점유) 중인 락들 */
+  struct lock *waiting_for_lock; /* 내가 기다리고 있는 락 */
+
 #ifdef USERPROG
   /* Owned by userprog/process.c. */
   uint64_t *pml4; /* Page map level 4 */
