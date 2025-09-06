@@ -296,7 +296,6 @@ void thread_yield(void) {  // 현재 스레드가 가장 높은 우선순위를 
   if (curr != idle_thread) {
     if (!list_empty(&ready_list)) {
       struct thread *highest = list_entry(list_front(&ready_list), struct thread, elem);
-      struct list_elem *e;
 
       if (curr->priority > highest->priority) {  // 현재 쓰레드가 ready_list에 있는 쓰레드들보다 우선순위가 높다면
         intr_set_level(old_level);
