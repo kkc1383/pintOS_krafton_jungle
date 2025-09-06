@@ -401,6 +401,10 @@ static void init_thread(struct thread *t, const char *name, int priority) {
   t->tf.rsp = (uint64_t)t + PGSIZE - sizeof(void *);
   t->priority = priority;
   t->wake_tick = 0;  // 깨워야하는 시간 초기화
+  t->original_priority=priority;
+  list_init(&t->acquired_locks);
+  t->waiting_for_lock=NULL;
+
   t->magic = THREAD_MAGIC;
 }
 
