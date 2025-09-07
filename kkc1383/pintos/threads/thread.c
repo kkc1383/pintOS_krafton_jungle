@@ -312,8 +312,10 @@ void thread_yield(void) {  // 현재 스레드가 가장 높은 우선순위를 
 void thread_set_priority(int new_priority) {
   struct thread *curr = thread_current();
   int old_priority = curr->priority;
-  curr->priority = new_priority;
-  curr->original_priority=new_priority;
+
+  // donate를 안받은 경우에는 priority를 바꿔주어야 함. // lock_release에서 적당한 priority로 바꿔 줄거라서
+  if (curr->is_donated == 0) curr->priority = new_priority;
+  curr->original_priority = new_priority;
   if (old_priority > new_priority) {  // 만약 우선순위가 더 낮아졌고, ready_list에 원소가 있을 떄
     thread_yield();                   // yield를 통해 뒤로 보냄
   }
@@ -402,10 +404,10 @@ static void init_thread(struct thread *t, const char *name, int priority) {
   t->tf.rsp = (uint64_t)t + PGSIZE - sizeof(void *);
   t->priority = priority;
   t->wake_tick = 0;  // 깨워야하는 시간 초기화
-  t->original_priority=priority;
+  t->original_priority = priority;
   list_init(&t->acquired_locks);
-  t->waiting_for_lock=NULL;
-
+  t->waiting_for_lock = NULL;
+  t->is_donated = 0;
   t->magic = THREAD_MAGIC;
 }
 
