@@ -186,7 +186,7 @@ void lock_acquire(struct lock *lock) { // P 함수의 wrapper, 해당 락을 점
   if(lock->holder !=NULL && lock->holder->priority < curr->priority){ // 만약 내가 기다리는 락을 점유하는 holder의 우선순위가 나보다 낮을 경우
     lock->holder->priority=curr->priority; // priority donate
   }
-  curr->waiting_for_lock=lock;
+  curr->waiting_for_lock=lock; //쓰레드 waiting_for_lock 필드 갱신
 
   intr_set_level(old_level);
   sema_down(&lock->semaphore); // 여기서 block 당함
