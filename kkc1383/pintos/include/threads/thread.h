@@ -78,7 +78,7 @@ typedef int tid_t;
  * The first symptom of either of these problems will probably be
  * an assertion failure in thread_current(), which checks that
  * the `magic' member of the running thread's `struct thread' is
- * set to THREAD_MAGIC.  Stack overflow will normally change this
+ * set to THREAD_MAGIC.  Stack overflow will normally ge this
  * value, triggering the assertion. */
 /* The `elem' member has a dual purpose.  It can be an element in
  * the run queue (thread.c), or it can be an element in a
@@ -98,9 +98,10 @@ struct thread {
   int64_t wake_tick;           /* 쓰레드를 깨울 시간 */
   struct list_elem sleep_elem; /* sleep_list에서의 연결리스트 노드 */
 
-  int original_priority;      /* 원래 우선순위(기부 이전) */
-  struct list acquired_locks; /* 현재 보유(점유) 중인 락들 */
+  int original_priority;         /* 원래 우선순위(기부 이전) */
+  struct list acquired_locks;    /* 현재 보유(점유) 중인 락들 */
   struct lock *waiting_for_lock; /* 내가 기다리고 있는 락 */
+  int is_donated;                /* 현재 우선순위가 기부받고 있는 상황인지 */
 
 #ifdef USERPROG
   /* Owned by userprog/process.c. */
