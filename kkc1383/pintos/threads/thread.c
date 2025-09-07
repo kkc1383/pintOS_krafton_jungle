@@ -313,6 +313,7 @@ void thread_set_priority(int new_priority) {
   struct thread *curr = thread_current();
   int old_priority = curr->priority;
   curr->priority = new_priority;
+  curr->original_priority=new_priority;
   if (old_priority > new_priority) {  // 만약 우선순위가 더 낮아졌고, ready_list에 원소가 있을 떄
     thread_yield();                   // yield를 통해 뒤로 보냄
   }
