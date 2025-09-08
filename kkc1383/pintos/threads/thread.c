@@ -74,6 +74,7 @@ static void init_thread(struct thread *, const char *name, int priority);
 static void do_schedule(int status);
 static void schedule(void);
 static tid_t allocate_tid(void);
+static int max_priority_mlfqs_queue();
 
 /* Returns true if T appears to point to a valid thread. */
 #define is_thread(t) ((t) != NULL && (t)->magic == THREAD_MAGIC)
@@ -355,6 +356,8 @@ void thread_yield(void) {  // 현재 스레드가 가장 높은 우선순위를 
 
 /* Sets the current thread's priority to NEW_PRIORITY. */
 void thread_set_priority(int new_priority) {
+  if (thread_mlfqs) return;  // mlfqs에서는 발동하지 않기, 즉시 리턴
+
   struct thread *curr = thread_current();
   int old_priority = curr->priority;
 
@@ -391,14 +394,25 @@ void mlfqs_update_priority(struct thread *t) {
 int thread_get_priority(void) { return thread_current()->priority; }
 
 /* Sets the current thread's nice value to NICE. */
-void thread_set_nice(int nice UNUSED) { /* TODO: Your implementation goes here */
+void thread_set_nice(int nice) {
+  // nice를 [-20,20] 범위로 제한 :
+  if (nice > 20)
+    nice = 20;
+  else if (nice < -20)
+    nice = -20;
+  //현재 스레드의 nice 값 업데이트
+  struct thread *curr = thread_current();
+  curr->nice = nice;
+  // 자신의 priority 재계산
+  mlfqs_update_priority(curr);
+  // 만약 자신이 더 이상 최고 priority가 아니면 양보
+  if (curr->priority <= max_priority_mlfqs_queue()) {
+    thread_yield();
+  }
 }
 
 /* Returns the current thread's nice value. */
-int thread_get_nice(void) {
-  /* TODO: Your implementation goes here */
-  return 0;
-}
+int thread_get_nice(void) { return thread_current()->nice; }
 
 /* Returns 100 times the system load average. */
 int thread_get_load_avg(void) {
@@ -489,16 +503,14 @@ static void init_thread(struct thread *t, const char *name, int priority) {
    will be in the run queue.)  If the run queue is empty, return
    idle_thread. */
 static struct thread *next_thread_to_run(void) {
-  if (thread_mlfqs) {                           // mlfqs 일 때
-    for (int i = PRI_MAX; i >= PRI_MIN; i--) {  // 우선순위 다중 ready 큐 순회, 우선순위 높은 순으로
-      if (!list_empty(&mlfqs_ready_queues[i - PRI_MIN])) {  //노드가 있는 큐를 찾았으면
-        ready_threads_count--;                              // count 내려주고
-        return list_entry(list_pop_front(&mlfqs_ready_queues[i - PRI_MIN]), struct thread,
-                          elem);  // 젤 앞에 있는 거 반환
-      }
-    }
-    return idle_thread;  // 맞는 큐가 없을 때
-  } else {               // 일반적인 경우 일 때
+  if (thread_mlfqs) {  // mlfqs 일 때
+    int max_priority;
+    if ((max_priority = max_priority_mlfqs_queue()) >= 0) {  // ready 다중 큐에서 존재하는 가장 높은 prioirty 반환
+      ready_threads_count--;
+      return list_entry(list_pop_front(&mlfqs_ready_queues[max_priority - PRI_MIN]), struct thread, elem);
+    } else  // 큐에 존재하는 쓰레드가 없을 때
+      return idle_thread;
+  } else {  // 일반적인 경우 일 때
     if (list_empty(&ready_list))
       return idle_thread;
     else
@@ -692,4 +704,13 @@ bool thread_priority_less(const struct list_elem *a, const struct list_elem *b, 
   struct thread *thread_b = list_entry(b, struct thread, elem);
 
   return thread_a->priority > thread_b->priority;
+}
+
+static int max_priority_mlfqs_queue() {  // mlfqs에서 존재하는 ready_thread 중 가장 높은 우선순위를 반환
+  for (int i = PRI_MAX; i >= PRI_MIN; i--) {  // 우선순위 다중 ready 큐 순회, 우선순위 높은 순으로
+    if (!list_empty(&mlfqs_ready_queues[i - PRI_MIN])) {  //노드가 있는 큐를 찾았으면
+      return i;
+    }
+  }
+  return -1;  //아예 비어있다면
 }
