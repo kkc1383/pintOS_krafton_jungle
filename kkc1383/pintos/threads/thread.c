@@ -127,12 +127,17 @@ void thread_init(void) {
   initial_thread->tid = allocate_tid();
 
   if (thread_mlfqs) {
-    mlfqs_update_priority(initial_thread);
-    printf("MLFQS scheduler enabled\n");
+    mlfqs_update_priority(initial_thread);  // 첫 main쓰레드 priority 설정(PRI_MAX)
 
-    printf("Initial thread priority: %d (should be %d)\n", initial_thread->priority, PRI_MAX);
-    printf("Initial thread nice: %d, recent_cpu: %d\n", initial_thread->nice,
-           FP_TO_INT_ZERO(initial_thread->recent_cpu));
+    // mlfqs_ready_queues에는 PRI_MIN을 시작으로 PRI_MAX까지 우선순위별 다중 큐임
+    for (int i = PRI_MIN; i <= PRI_MAX; i++) {
+      list_init(&mlfqs_ready_queues[i - PRI_MIN]);
+    }
+    ready_threads_count = 0;  // 0으로 초기화
+    // printf("MLFQS scheduler enabled\n");
+    // printf("Initial thread priority: %d (should be %d)\n", initial_thread->priority, PRI_MAX);
+    // printf("Initial thread nice: %d, recent_cpu: %d\n", initial_thread->nice,
+    //        FP_TO_INT_ZERO(initial_thread->recent_cpu));
 
   } else
     printf("Priority scheduler enabled\n");
@@ -205,6 +210,16 @@ tid_t thread_create(const char *name, int priority, thread_func *function, void 
   init_thread(t, name, priority);
   tid = t->tid = allocate_tid();
 
+  if (thread_mlfqs) {  // mlfqs일 경우
+    struct thread *parent = thread_current();
+    // 부모 쓰레드의 nice, recent_cpu 물려받기
+    if (parent != NULL) {
+      t->nice = parent->nice;
+      t->recent_cpu = parent->recent_cpu;
+    }
+    mlfqs_update_priority(t);  // priority 공식으로 계산
+  }
+
   /* Call the kernel_thread if it scheduled.
    * Note) rdi is 1st argument, and rsi is 2nd argument. */
   t->tf.rip = (uintptr_t)kernel_thread;
@@ -251,7 +266,14 @@ void thread_unblock(struct thread *t) {
   old_level = intr_disable();           // 인터럽트를 disable상태로 만들고 이전 상태를
                                         // 반환(기존 상태 저장해놓고, disable 만듬)
   ASSERT(t->status == THREAD_BLOCKED);  // 해당 쓰레드의 status 필드가 THREAD_BLOCKED인지 확인
-  list_insert_ordered(&ready_list, &t->elem, thread_priority_less, NULL);  // 우선순위 큰 순서대로 삽입
+
+  if (thread_mlfqs) {
+    list_push_back(&mlfqs_ready_queues[t->priority - PRI_MIN], &t->elem);  // 우선순위에 맞는 큐에 집어넣음
+    if (t != idle_thread)  // idle thread는 카운트 하면 안되므로
+      ready_threads_count++;
+  } else {
+    list_insert_ordered(&ready_list, &t->elem, thread_priority_less, NULL);  // 우선순위 큰 순서대로 삽입
+  }
   t->status = THREAD_READY;  // 해당 쓰레드의 상태를 THREAD_READY로 바꿈
 
   // 인터럽트끝나고 보내야할 경우에
@@ -459,16 +481,6 @@ static void init_thread(struct thread *t, const char *name, int priority) {
   /* mlfqs 멤버 초기화 */
   t->nice = 0;
   t->recent_cpu = INT_TO_FP(0);
-
-  if (thread_mlfqs) {  // mlfqs일 경우
-    struct thread *parent = thread_current();
-    // 부모 쓰레드의 nice, recent_cpu 물려받기
-    if (parent != NULL) {
-      t->nice = parent->nice;
-      t->recent_cpu = parent->recent_cpu;
-    }
-    mlfqs_update_priority(t);  // priority 공식으로 계산
-  }
 }
 
 /* Chooses and returns the next thread to be scheduled.  Should
@@ -477,10 +489,21 @@ static void init_thread(struct thread *t, const char *name, int priority) {
    will be in the run queue.)  If the run queue is empty, return
    idle_thread. */
 static struct thread *next_thread_to_run(void) {
-  if (list_empty(&ready_list))
-    return idle_thread;
-  else
-    return list_entry(list_pop_front(&ready_list), struct thread, elem);
+  if (thread_mlfqs) {                           // mlfqs 일 때
+    for (int i = PRI_MAX; i >= PRI_MIN; i--) {  // 우선순위 다중 ready 큐 순회, 우선순위 높은 순으로
+      if (!list_empty(&mlfqs_ready_queues[i - PRI_MIN])) {  //노드가 있는 큐를 찾았으면
+        ready_threads_count--;                              // count 내려주고
+        return list_entry(list_pop_front(&mlfqs_ready_queues[i - PRI_MIN]), struct thread,
+                          elem);  // 젤 앞에 있는 거 반환
+      }
+    }
+    return idle_thread;  // 맞는 큐가 없을 때
+  } else {               // 일반적인 경우 일 때
+    if (list_empty(&ready_list))
+      return idle_thread;
+    else
+      return list_entry(list_pop_front(&ready_list), struct thread, elem);
+  }
 }
 
 /* Use iretq to launch the thread */
