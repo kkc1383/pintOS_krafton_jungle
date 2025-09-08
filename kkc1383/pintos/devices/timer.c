@@ -130,6 +130,24 @@ static void timer_interrupt(struct intr_frame *args UNUSED) {
   ticks++;
   thread_tick();
 
+  /* recent_cpu 증가 */
+  if (thread_mlfqs) {  // mlqfs일 때만
+    struct thread *curr = thread_current();
+    if (is_not_idle(curr)) {                               // idle이 아닐 때만
+      curr->recent_cpu = ADD_FP_INT(curr->recent_cpu, 1);  // 현재 스레드의 recent_cpu를 1 올린다
+    }
+
+    // priority 최신화
+    if (ticks % 4 == 0) {
+      thread_update_all_priority();
+    }
+    /* load_avg 최신화 */
+    if (ticks % TIMER_FREQ == 0) {  // 1초 마다
+      thread_update_load_avg();
+      thread_update_all_recent_cpu();
+    }
+  }
+
   // 잠든 쓰레드를 깨우자
   while (!list_empty(get_sleep_list())) {
     struct thread *sleep_thread = list_entry(list_front(get_sleep_list()), struct thread, sleep_elem);
