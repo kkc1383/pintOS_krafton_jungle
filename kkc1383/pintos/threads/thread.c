@@ -7,6 +7,7 @@
 #include <string.h>
 
 #include "intrinsic.h"
+#include "threads/fixed-point.h"
 #include "threads/flags.h"
 #include "threads/interrupt.h"
 #include "threads/intr-stubs.h"
@@ -31,6 +32,11 @@
    that are ready to run but not actually running. */
 static struct list ready_list;
 static struct list sleep_list;  // sleep_list를 관리할 이중 연결리스트 생성
+
+/* MLQFS 전용 다중 큐*/
+static struct list mlfqs_ready_queues[PRI_MAX - PRI_MIN + 1];
+static int ready_threads_count;
+
 /* Idle thread. */
 static struct thread *idle_thread;
 
@@ -47,6 +53,9 @@ static struct list destruction_req;
 static long long idle_ticks;   /* # of timer ticks spent idle. */
 static long long kernel_ticks; /* # of timer ticks in kernel threads. */
 static long long user_ticks;   /* # of timer ticks in user programs. */
+
+/* mlfqs global variables */
+static fixed_t load_avg; /* 시스템 부하 평균 (fixed-point) */
 
 /* Scheduling. */
 #define TIME_SLICE 4          /* # of timer ticks to give each thread. */
@@ -108,11 +117,25 @@ void thread_init(void) {
   list_init(&ready_list);
   list_init(&destruction_req);
 
+  /* mlfqs 초기화 */
+  load_avg = INT_TO_FP(0); /* load_avg 를 0.0으로 초기화 */
+
   /* Set up a thread structure for the running thread. */
   initial_thread = running_thread();
   init_thread(initial_thread, "main", PRI_DEFAULT);
-  initial_thread->status = THREAD_RUNNING;
+  initial_thread->status = THREAD_RUNNING;  // 이거 순서 매우 중요함
   initial_thread->tid = allocate_tid();
+
+  if (thread_mlfqs) {
+    mlfqs_update_priority(initial_thread);
+    printf("MLFQS scheduler enabled\n");
+
+    printf("Initial thread priority: %d (should be %d)\n", initial_thread->priority, PRI_MAX);
+    printf("Initial thread nice: %d, recent_cpu: %d\n", initial_thread->nice,
+           FP_TO_INT_ZERO(initial_thread->recent_cpu));
+
+  } else
+    printf("Priority scheduler enabled\n");
 }
 
 /* Starts preemptive thread scheduling by enabling interrupts.
@@ -321,6 +344,27 @@ void thread_set_priority(int new_priority) {
   }
 }
 
+void mlfqs_update_priority(struct thread *t) {
+  if (!thread_mlfqs) return;  // mlqfs 가 아니라면 나가라
+
+  ASSERT(t != NULL);
+
+  /* recent CPU /4 */
+  int recent_cpu_div4 = FP_TO_INT_ZERO(DIV_FP_INT(t->recent_cpu, 4));  // recent_cpu 나누기 4를 정수로 절삭한거
+
+  /* nice * 2 */
+  int nice_mul2 = t->nice * 2;
+
+  /* priority = PRI_MAX - recent_cpu/4 - nice *2 */
+  int new_priority = PRI_MAX - recent_cpu_div4 - nice_mul2;
+
+  /* [PRI_MIN,PRI,MAX] 범위를 벗어나지 않게 조절 */
+  if (new_priority > PRI_MAX) new_priority = PRI_MAX;  // max를 넘어갔으면 max로
+  if (new_priority < PRI_MIN) new_priority = PRI_MIN;  // min을 넘어갔으면 min으로
+
+  t->priority = new_priority;
+}
+
 /* Returns the current thread's priority. */
 int thread_get_priority(void) { return thread_current()->priority; }
 
@@ -402,13 +446,29 @@ static void init_thread(struct thread *t, const char *name, int priority) {
   t->status = THREAD_BLOCKED;
   strlcpy(t->name, name, sizeof t->name);
   t->tf.rsp = (uint64_t)t + PGSIZE - sizeof(void *);
-  t->priority = priority;
+  t->magic = THREAD_MAGIC;
+
   t->wake_tick = 0;  // 깨워야하는 시간 초기화
+
+  t->priority = priority;
   t->original_priority = priority;
   list_init(&t->acquired_locks);
   t->waiting_for_lock = NULL;
   t->is_donated = 0;
-  t->magic = THREAD_MAGIC;
+
+  /* mlfqs 멤버 초기화 */
+  t->nice = 0;
+  t->recent_cpu = INT_TO_FP(0);
+
+  if (thread_mlfqs) {  // mlfqs일 경우
+    struct thread *parent = thread_current();
+    // 부모 쓰레드의 nice, recent_cpu 물려받기
+    if (parent != NULL) {
+      t->nice = parent->nice;
+      t->recent_cpu = parent->recent_cpu;
+    }
+    mlfqs_update_priority(t);  // priority 공식으로 계산
+  }
 }
 
 /* Chooses and returns the next thread to be scheduled.  Should
