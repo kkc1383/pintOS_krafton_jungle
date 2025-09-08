@@ -5,6 +5,7 @@
 #include <list.h>
 #include <stdint.h>
 
+#include "threads/fixed-point.h"
 #include "threads/interrupt.h"
 
 #ifdef VM
@@ -103,6 +104,10 @@ struct thread {
   struct lock *waiting_for_lock; /* 내가 기다리고 있는 락 */
   int is_donated;                /* 현재 우선순위가 기부받고 있는 상황인지 */
 
+  /* mlfqs 전용*/
+  int nice;           /* CPU를 양보하는 척도 (-20~20) */
+  fixed_t recent_cpu; /* 최근 CPU 사용량 (fixed-point)*/
+
 #ifdef USERPROG
   /* Owned by userprog/process.c. */
   uint64_t *pml4; /* Page map level 4 */
@@ -154,6 +159,7 @@ void do_iret(struct intr_frame *tf);
 struct list *get_ready_list();
 struct list *get_sleep_list();
 
+void mlfqs_update_priority(struct thread *t);
 bool thread_priority_less(const struct list_elem *a, const struct list_elem *b, void *aux);
 
 #endif /* threads/thread.h */
