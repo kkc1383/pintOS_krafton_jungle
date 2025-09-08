@@ -45,8 +45,6 @@ void timer_init(void) {
   outb(0x40, count >> 8);
 
   intr_register_ext(0x20, timer_interrupt, "8254 Timer");
-
-  list_init(get_sleep_list());  // 전역 sleep_list 초기화
 }
 
 /* Calibrates loops_per_tick, used to implement brief delays. */
