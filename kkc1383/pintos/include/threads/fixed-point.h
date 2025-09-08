@@ -58,4 +58,7 @@ typedef int fixed_t; /* fixed-point를 표현하는 타입 */
 /* 59/60 */
 #define FP_59_60 (DIV_FP_INT(INT_TO_FP(59), 60))
 
+/* 1/60 */
+#define FP_1_60 (DIV_FP_INT(INT_TO_FP(1), 60))
+
 #endif /* threads/fixed-point.h */
