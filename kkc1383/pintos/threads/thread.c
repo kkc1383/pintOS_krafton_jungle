@@ -116,6 +116,7 @@ void thread_init(void) {
   /* Init the global thread context */
   lock_init(&tid_lock);
   list_init(&ready_list);
+  list_init(&sleep_list);
   list_init(&destruction_req);
 
   /* mlfqs 초기화 */
@@ -135,10 +136,6 @@ void thread_init(void) {
       list_init(&mlfqs_ready_queues[i - PRI_MIN]);
     }
     ready_threads_count = 0;  // 0으로 초기화
-    // printf("MLFQS scheduler enabled\n");
-    // printf("Initial thread priority: %d (should be %d)\n", initial_thread->priority, PRI_MAX);
-    // printf("Initial thread nice: %d, recent_cpu: %d\n", initial_thread->nice,
-    //        FP_TO_INT_ZERO(initial_thread->recent_cpu));
 
   } else
     printf("Priority scheduler enabled\n");
@@ -368,7 +365,7 @@ void thread_set_priority(int new_priority) {
     thread_yield();                   // yield를 통해 뒤로 보냄
   }
 }
-
+// thread_update_all_priority 생성해야함
 void mlfqs_update_priority(struct thread *t) {
   if (!thread_mlfqs) return;  // mlqfs 가 아니라면 나가라
 
@@ -415,15 +412,41 @@ void thread_set_nice(int nice) {
 int thread_get_nice(void) { return thread_current()->nice; }
 
 /* Returns 100 times the system load average. */
-int thread_get_load_avg(void) {
-  /* TODO: Your implementation goes here */
-  return 0;
+fixed_t thread_get_load_avg(void) { return load_avg; }
+// timer_interrupt 함수에서 구현했으면 getter함수때문에 가독성이 떨어질까봐 접근이 쉬운 thread.c에서 구현
+void thread_update_load_avg(void) {
+  int running_and_ready_thread_count =
+      ready_threads_count + is_not_idle(thread_current());  // 현재 스레드도 갯수에 포함해야 하는데, idle은 포함 x
+  // load_avg = (59/60) * load_avg + (1/60) * ready_threads_count;
+  load_avg = ADD_FP(MULT_FP(FP_59_60, load_avg), MULT_FP_INT(FP_1_60, running_and_ready_thread_count));
 }
 
 /* Returns 100 times the current thread's recent_cpu value. */
-int thread_get_recent_cpu(void) {
-  /* TODO: Your implementation goes here */
-  return 0;
+fixed_t thread_get_recent_cpu(struct thread *t) { return t->recent_cpu; }
+void thread_update_all_recent_cpu(void) {
+  struct list_elem *e;  // thread_list 순회 시 사용하는 iterator
+  /* for ready list */
+  for (int i = PRI_MIN; i <= PRI_MAX; i++) {  //다중 큐 하나씩 순회
+    for (e = list_begin(&mlfqs_ready_queues[i - PRI_MIN]); e != list_end(&mlfqs_ready_queues[i - PRI_MIN]);
+         e = list_next(e)) {  // 하나의 큐에서 모든 스레드 순회
+      struct thread *t = list_entry(e, struct thread, elem);
+      thread_update_recent_cpu(t);
+    }
+  }
+  /* for running list */
+  struct thread *curr = thread_current();
+  if (curr != idle_thread) thread_update_recent_cpu(curr);  // idle이 아닐때만 recent_cpu 최신화
+
+  /* for sleep list */
+  for (e = list_begin(&sleep_list); e != list_end(&sleep_list); e = list_next(e)) {
+    struct thread *t = list_entry(e, struct thread, sleep_elem);
+    thread_update_recent_cpu(t);
+  }
+}
+// 각 리스트 별로 매크로 떡칠인 라인을 넣자니 너무 지저분해서 따로 함수로 만듬
+static void thread_update_recent_cpu(struct thread *t) {
+  t->recent_cpu = ADD_FP_INT(
+      MULT_FP(DIV_FP(MULT_FP_INT(load_avg, 2), ADD_FP_INT(MULT_FP_INT(load_avg, 2), 1)), t->recent_cpu), t->nice);
 }
 
 /* Idle thread.  Executes when no other thread is ready to run.
@@ -692,10 +715,10 @@ static tid_t allocate_tid(void) {
   return tid;
 }
 
-struct list *get_ready_list() {
+struct list *get_ready_list(void) {
   return &ready_list;
 }
-struct list *get_sleep_list() {
+struct list *get_sleep_list(void) {
   return &sleep_list;
 }
 
@@ -706,7 +729,7 @@ bool thread_priority_less(const struct list_elem *a, const struct list_elem *b, 
   return thread_a->priority > thread_b->priority;
 }
 
-static int max_priority_mlfqs_queue() {  // mlfqs에서 존재하는 ready_thread 중 가장 높은 우선순위를 반환
+static int max_priority_mlfqs_queue(void) {  // mlfqs에서 존재하는 ready_thread 중 가장 높은 우선순위를 반환
   for (int i = PRI_MAX; i >= PRI_MIN; i--) {  // 우선순위 다중 ready 큐 순회, 우선순위 높은 순으로
     if (!list_empty(&mlfqs_ready_queues[i - PRI_MIN])) {  //노드가 있는 큐를 찾았으면
       return i;
@@ -714,3 +737,5 @@ static int max_priority_mlfqs_queue() {  // mlfqs에서 존재하는 ready_threa
   }
   return -1;  //아예 비어있다면
 }
+
+bool is_not_idle(struct thread *t) { return t != idle_thread; }
