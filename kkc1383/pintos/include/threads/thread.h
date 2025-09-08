@@ -151,15 +151,17 @@ void thread_set_priority(int);
 
 int thread_get_nice(void);
 void thread_set_nice(int);
-int thread_get_recent_cpu(void);
-int thread_get_load_avg(void);
-
+fixed_t thread_get_recent_cpu(struct thread *);
+void thread_update_all_recent_cpu(void);
+fixed_t thread_get_load_avg(void);
+void thread_update_load_avg(void);
 void do_iret(struct intr_frame *tf);
 
-struct list *get_ready_list();
-struct list *get_sleep_list();
+struct list *get_ready_list(void);
+struct list *get_sleep_list(void);
 
 void mlfqs_update_priority(struct thread *t);
-bool thread_priority_less(const struct list_elem *a, const struct list_elem *b, void *aux);
+bool thread_priority_less(const struct list_elem *, const struct list_elem *, void *);
+bool is_not_idle(struct thread *);
 
 #endif /* threads/thread.h */
