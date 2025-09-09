@@ -130,6 +130,7 @@ void thread_init(void) {
   init_thread(initial_thread, "main", PRI_DEFAULT);
   initial_thread->status = THREAD_RUNNING;  // 이거 순서 매우 중요함
   initial_thread->tid = allocate_tid();
+  list_push_front(&all_list, &initial_thread->all_elem);
 
   if (thread_mlfqs) {
     mlfqs_update_priority(initial_thread);  // 첫 main쓰레드 priority 설정(PRI_MAX)
@@ -210,7 +211,7 @@ tid_t thread_create(const char *name, int priority, thread_func *function, void 
   /* Initialize thread. */
   init_thread(t, name, priority);
   tid = t->tid = allocate_tid();
-  list_push_back(&all_list, &t->all_elem);
+  list_push_back(&all_list, &t->all_elem);  // all_list에 원소 넣기
 
   if (thread_mlfqs) {  // mlfqs일 경우
     struct thread *parent = thread_current();
@@ -328,7 +329,7 @@ void thread_exit(void) {
   /* Just set our status to dying and schedule another process.
      We will be destroyed during the call to schedule_tail(). */
   intr_disable();
-  list_remove(&thread_current()->all_elem);
+  list_remove(&thread_current()->all_elem);  // all_list에서 제거
   do_schedule(THREAD_DYING);
   NOT_REACHED();
 }
@@ -344,7 +345,7 @@ void thread_yield(void) {  // 현재 스레드가 가장 높은 우선순위를 
   if (curr != idle_thread) {
     if (thread_mlfqs) {  // mlfqs 모드인 경우
       int max_priority = max_priority_mlfqs_queue();
-      if (max_priority > 0) {  // 전체 큐가 비어있지 않은 경우
+      if (max_priority >= 0) {  // 전체 큐가 비어있지 않은 경우
         if (curr->priority > max_priority) {
           intr_set_level(old_level);
           return;
@@ -409,7 +410,7 @@ void thread_update_all_priority(void) {
   }
 
   // 혹시 현재 스레드의 우선순위가 레디큐에 있는 쓰레드보다 작거나 같다면 양보해야함
-  if (thread_current()->priority < max_priority_mlfqs_queue()) {
+  if (thread_current()->priority <= max_priority_mlfqs_queue()) {
     if (intr_context()) {
       intr_yield_on_return();
     } else {
@@ -430,7 +431,8 @@ void mlfqs_update_priority(struct thread *t) {
   int recent_cpu_div4 = FP_TO_INT_ZERO(DIV_FP_INT(t->recent_cpu, 4));  // recent_cpu 나누기 4를 정수로 절삭한거
 
   /* nice * 2 */
-  int nice_mul2 = t->nice * 2;
+  int nice_mul2 = t->nice + FP_TO_INT_ZERO(MULT_FP_INT(FP_59_60, t->nice));
+  // int nice_mul2 = t->nice * 2;
 
   /* priority = PRI_MAX - recent_cpu/4 - nice *2 */
   int new_priority = PRI_MAX - recent_cpu_div4 - nice_mul2;
@@ -459,9 +461,10 @@ void thread_set_nice(int nice) {
   curr->nice = nice;
   // 자신의 priority 재계산
   mlfqs_update_priority(curr);
+
   // 만약 자신이 더 이상 최고 priority가 아니면 양보
   /* 조건보고 양보하는 경우 (다른 쓰레드에 의해서 race 발생해서 max가 바뀔수도 있음)*/
-  if (curr->priority < max_priority_mlfqs_queue()) {
+  if (curr->priority <= max_priority_mlfqs_queue()) {
     if (intr_context()) {
       intr_yield_on_return();
     } else {
@@ -498,6 +501,7 @@ void thread_update_all_recent_cpu(void) {
   }
 }
 // 각 리스트 별로 매크로 떡칠인 라인을 넣자니 너무 지저분해서 따로 함수로 만듬
+/* recent_cpu = load_avg * 2 / (load_avg * 2 + 1 ) + nice */
 static void thread_update_recent_cpu(struct thread *t) {
   t->recent_cpu = ADD_FP_INT(
       MULT_FP(DIV_FP(MULT_FP_INT(load_avg, 2), ADD_FP_INT(MULT_FP_INT(load_avg, 2), 1)), t->recent_cpu), t->nice);
@@ -584,7 +588,9 @@ static struct thread *next_thread_to_run(void) {
     int max_priority;
     if ((max_priority = max_priority_mlfqs_queue()) >= 0) {  // ready 다중 큐에서 존재하는 가장 높은 prioirty 반환
       ready_threads_count--;                                 // ready_thread_count를 뺌
-      return list_entry(list_pop_front(&mlfqs_ready_queues[max_priority - PRI_MIN]), struct thread, elem);
+      struct thread *selected =
+          list_entry(list_pop_front(&mlfqs_ready_queues[max_priority - PRI_MIN]), struct thread, elem);
+      return selected;
     } else  // 큐에 존재하는 쓰레드가 없을 때
       return idle_thread;
   } else {  // 일반적인 경우 일 때

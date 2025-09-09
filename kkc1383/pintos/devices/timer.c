@@ -87,7 +87,6 @@ int64_t timer_elapsed(int64_t then) { return timer_ticks() - then; }
 void timer_sleep(int64_t ticks) {
   int64_t start = timer_ticks();
   ASSERT(intr_get_level() == INTR_ON);
-
   // edge case 처리 : tick가 0 이하라면?
   if (ticks <= 0) return;
 
@@ -127,6 +126,16 @@ static void timer_interrupt(struct intr_frame *args UNUSED) {
   ticks++;
   thread_tick();
 
+  // 잠든 쓰레드를 깨우자
+  while (!list_empty(get_sleep_list())) {
+    struct thread *sleep_thread = list_entry(list_front(get_sleep_list()), struct thread, sleep_elem);
+    if (sleep_thread->wake_tick > ticks)  // wake_tick이 흐른 시간보다 크다면, 아직 깨울 때가 아님
+      break;
+    //깨울 때라면
+    list_pop_front(get_sleep_list());
+    thread_unblock(sleep_thread);
+  }
+
   /* recent_cpu 증가 */
   if (thread_mlfqs) {  // mlqfs일 때만
     struct thread *curr = thread_current();
@@ -142,17 +151,8 @@ static void timer_interrupt(struct intr_frame *args UNUSED) {
     if (ticks % TIMER_FREQ == 0) {  // 1초 마다
       thread_update_load_avg();
       thread_update_all_recent_cpu();
+      thread_update_all_priority();
     }
-  }
-
-  // 잠든 쓰레드를 깨우자
-  while (!list_empty(get_sleep_list())) {
-    struct thread *sleep_thread = list_entry(list_front(get_sleep_list()), struct thread, sleep_elem);
-    if (sleep_thread->wake_tick > ticks)  // wake_tick이 흐른 시간보다 크다면, 아직 깨울 때가 아님
-      break;
-    //깨울 때라면
-    list_pop_front(get_sleep_list());
-    thread_unblock(sleep_thread);
   }
 }
 
