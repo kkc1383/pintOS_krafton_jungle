@@ -98,6 +98,7 @@ struct thread {
   struct list_elem elem;       /* List element. */
   int64_t wake_tick;           /* 쓰레드를 깨울 시간 */
   struct list_elem sleep_elem; /* sleep_list에서의 연결리스트 노드 */
+  struct list_elem all_elem;   /* all_list에서의 연결리스트 노드 */
 
   int original_priority;         /* 원래 우선순위(기부 이전) */
   struct list acquired_locks;    /* 현재 보유(점유) 중인 락들 */
@@ -151,15 +152,16 @@ void thread_set_priority(int);
 
 int thread_get_nice(void);
 void thread_set_nice(int);
-fixed_t thread_get_recent_cpu(struct thread *);
+int thread_get_recent_cpu(void);
 void thread_update_all_recent_cpu(void);
-fixed_t thread_get_load_avg(void);
+int thread_get_load_avg(void);
 void thread_update_load_avg(void);
 void do_iret(struct intr_frame *tf);
 
 struct list *get_ready_list(void);
 struct list *get_sleep_list(void);
 
+void thread_update_all_priority(void);
 void mlfqs_update_priority(struct thread *t);
 bool thread_priority_less(const struct list_elem *, const struct list_elem *, void *);
 bool is_not_idle(struct thread *);
