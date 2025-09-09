@@ -86,7 +86,6 @@ int64_t timer_elapsed(int64_t then) { return timer_ticks() - then; }
 /* Suspends execution for approximately TICKS timer ticks. */
 void timer_sleep(int64_t ticks) {
   int64_t start = timer_ticks();
-
   ASSERT(intr_get_level() == INTR_ON);
 
   // edge case 처리 : tick가 0 이하라면?

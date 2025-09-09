@@ -352,6 +352,7 @@ void thread_yield(void) {  // 현재 스레드가 가장 높은 우선순위를 
       }
       list_push_back(&mlfqs_ready_queues[curr->priority - PRI_MIN],
                      &curr->elem);  // 본인 우선순위에 맞는 레디큐로 들어감
+      ready_threads_count++;
     } else {
       if (!list_empty(&ready_list)) {
         struct thread *highest = list_entry(list_front(&ready_list), struct thread, elem);
@@ -409,9 +410,13 @@ void thread_update_all_priority(void) {
 
   // 혹시 현재 스레드의 우선순위가 레디큐에 있는 쓰레드보다 작거나 같다면 양보해야함
   if (thread_current()->priority < max_priority_mlfqs_queue()) {
-    intr_set_level(old_level);  // 인터럽트 풀어주고
-    thread_yield();             // 양보
-    return;
+    if (intr_context()) {
+      intr_yield_on_return();
+    } else {
+      intr_set_level(old_level);  // 인터럽트 풀어주고
+      thread_yield();             // 양보
+      return;
+    }
   }
 
   intr_set_level(old_level);  // 인터럽트 복원
@@ -457,11 +462,15 @@ void thread_set_nice(int nice) {
   // 만약 자신이 더 이상 최고 priority가 아니면 양보
   /* 조건보고 양보하는 경우 (다른 쓰레드에 의해서 race 발생해서 max가 바뀔수도 있음)*/
   if (curr->priority < max_priority_mlfqs_queue()) {
-    intr_set_level(old_level);
-    thread_yield();
-    return;
-  } else
-    intr_set_level(old_level);
+    if (intr_context()) {
+      intr_yield_on_return();
+    } else {
+      intr_set_level(old_level);
+      thread_yield();
+      return;
+    }
+  }
+  intr_set_level(old_level);
 }
 
 /* Returns the current thread's nice value. */
@@ -574,6 +583,7 @@ static struct thread *next_thread_to_run(void) {
   if (thread_mlfqs) {  // mlfqs 일 때
     int max_priority;
     if ((max_priority = max_priority_mlfqs_queue()) >= 0) {  // ready 다중 큐에서 존재하는 가장 높은 prioirty 반환
+      ready_threads_count--;                                 // ready_thread_count를 뺌
       return list_entry(list_pop_front(&mlfqs_ready_queues[max_priority - PRI_MIN]), struct thread, elem);
     } else  // 큐에 존재하는 쓰레드가 없을 때
       return idle_thread;
@@ -704,7 +714,6 @@ static void schedule(void) {
   struct thread *next = next_thread_to_run();  // ready_list에서 쓰레드 하나를 pop 함.
                                                // ready_list에서 뽑을 마땅한 쓰레드가 없다면 idle
                                                // 반환
-  if (curr->status != THREAD_READY) ready_threads_count--;  // block되어서 스케쥴 되는 경우만 ready_thread_count를 뺌
 
   ASSERT(intr_get_level() == INTR_OFF);    // 인터럽트가 disable상태인지 확인
   ASSERT(curr->status != THREAD_RUNNING);  // 현재 쓰레드가 제대로 THREAD_RUNNING가 아니게

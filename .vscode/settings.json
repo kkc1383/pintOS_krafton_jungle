@@ -16,6 +16,7 @@
         "random": "c",
         "synch.h": "c",
         "flags.h": "c",
-        "fixed-point.h": "c"
+        "fixed-point.h": "c",
+        "tests.h": "c"
     }
 }
