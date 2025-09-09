@@ -248,8 +248,7 @@ tid_t thread_create(const char *name, int priority, thread_func *function, void 
 void thread_block(void) {
   ASSERT(!intr_context());
   ASSERT(intr_get_level() == INTR_OFF);
-  struct thread *curr = thread_current();
-  curr->status = THREAD_BLOCKED;
+  thread_current()->status = THREAD_BLOCKED;
   schedule();
 }
 
@@ -272,7 +271,6 @@ void thread_unblock(struct thread *t) {
 
   if (thread_mlfqs) {
     list_push_back(&mlfqs_ready_queues[t->priority - PRI_MIN], &t->elem);  // 우선순위에 맞는 큐에 집어넣음
-    // ready_threads_count++;
     if (t != idle_thread)  // idle thread는 카운트 하면 안되므로
       ready_threads_count++;
   } else {
@@ -353,7 +351,7 @@ void thread_yield(void) {  // 현재 스레드가 가장 높은 우선순위를 
         }
       }
       list_push_back(&mlfqs_ready_queues[curr->priority - PRI_MIN],
-                     &curr->elem);  // 본인 우선순위에 맞는 레디큐로 들어감\
+                     &curr->elem);  // 본인 우선순위에 맞는 레디큐로 들어감
     } else {
       if (!list_empty(&ready_list)) {
         struct thread *highest = list_entry(list_front(&ready_list), struct thread, elem);
@@ -473,8 +471,8 @@ int thread_get_nice(void) { return thread_current()->nice; }
 int thread_get_load_avg(void) { return FP_TO_INT_ZERO(MULT_FP_INT(load_avg, 100)); }
 // timer_interrupt 함수에서 구현했으면 getter함수때문에 가독성이 떨어질까봐 접근이 쉬운 thread.c에서 구현
 void thread_update_load_avg(void) {
-  int running_and_ready_thread_count = is_not_idle(thread_current());
-  // ready_threads_count + is_not_idle(thread_current());  // 현재 스레드도 갯수에 포함해야 하는데, idle은 포함 x
+  int running_and_ready_thread_count =
+      ready_threads_count + is_not_idle(thread_current());  // 현재 스레드도 갯수에 포함해야 하는데, idle은 포함 x
   // load_avg = (59/60) * load_avg + (1/60) * ready_threads_count;
   load_avg = ADD_FP(MULT_FP(FP_59_60, load_avg), MULT_FP_INT(FP_1_60, running_and_ready_thread_count));
 }
