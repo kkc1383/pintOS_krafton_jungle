@@ -431,7 +431,7 @@ void mlfqs_update_priority(struct thread *t) {
   int recent_cpu_div4 = FP_TO_INT_ZERO(DIV_FP_INT(t->recent_cpu, 4));  // recent_cpu 나누기 4를 정수로 절삭한거
 
   /* nice * 2 */
-  int nice_mul2 = t->nice + FP_TO_INT_ZERO(MULT_FP_INT(FP_59_60, t->nice));
+  int nice_mul2 = t->nice + FP_TO_INT_ZERO(MULT_FP_INT(FP_59_60, t->nice));  // 1.98
   // int nice_mul2 = t->nice * 2;
 
   /* priority = PRI_MAX - recent_cpu/4 - nice *2 */
