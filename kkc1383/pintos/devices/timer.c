@@ -145,7 +145,11 @@ static void timer_interrupt(struct intr_frame *args UNUSED) {
 
     // priority 최신화
     if (ticks % 4 == 0) {
-      thread_update_all_priority();
+      // 원래 모든 쓰레드를 순회해야하지만, 어짜피 바뀐건 현재쓰레드의 recent_cpu밖에 없다.
+      mlfqs_update_priority(thread_current());
+      if (thread_current()->priority <= max_priority_mlfqs_queue()) {
+        intr_yield_on_return();  // 핸들러 내부이므로 핸들러끝나고 yield
+      }
     }
     /* load_avg 최신화 */
     if (ticks % TIMER_FREQ == 0) {  // 1초 마다
