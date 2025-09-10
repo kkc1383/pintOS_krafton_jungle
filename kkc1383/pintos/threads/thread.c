@@ -75,7 +75,6 @@ static void init_thread(struct thread *, const char *name, int priority);
 static void do_schedule(int status);
 static void schedule(void);
 static tid_t allocate_tid(void);
-static int max_priority_mlfqs_queue(void);
 static void thread_update_recent_cpu(struct thread *t);
 
 /* Returns true if T appears to point to a valid thread. */
@@ -431,8 +430,7 @@ void mlfqs_update_priority(struct thread *t) {
   int recent_cpu_div4 = FP_TO_INT_ZERO(DIV_FP_INT(t->recent_cpu, 4));  // recent_cpu 나누기 4를 정수로 절삭한거
 
   /* nice * 2 */
-  int nice_mul2 = t->nice + FP_TO_INT_ZERO(MULT_FP_INT(FP_59_60, t->nice));  // 1.98
-  // int nice_mul2 = t->nice * 2;
+  int nice_mul2 = t->nice * 2;
 
   /* priority = PRI_MAX - recent_cpu/4 - nice *2 */
   int new_priority = PRI_MAX - recent_cpu_div4 - nice_mul2;
@@ -785,7 +783,7 @@ bool thread_priority_less(const struct list_elem *a, const struct list_elem *b, 
   return thread_a->priority > thread_b->priority;
 }
 
-static int max_priority_mlfqs_queue(void) {  // mlfqs에서 존재하는 ready_thread 중 가장 높은 우선순위를 반환
+int max_priority_mlfqs_queue(void) {  // mlfqs에서 존재하는 ready_thread 중 가장 높은 우선순위를 반환
   for (int i = PRI_MAX; i >= PRI_MIN; i--) {  // 우선순위 다중 ready 큐 순회, 우선순위 높은 순으로
     if (!list_empty(&mlfqs_ready_queues[i - PRI_MIN])) {  //노드가 있는 큐를 찾았으면
       return i;
