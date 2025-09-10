@@ -501,7 +501,7 @@ void thread_update_all_recent_cpu(void) {
   }
 }
 // 각 리스트 별로 매크로 떡칠인 라인을 넣자니 너무 지저분해서 따로 함수로 만듬
-/* recent_cpu = load_avg * 2 / (load_avg * 2 + 1 ) + nice */
+/* recent_cpu = load_avg * 2 / (load_avg * 2 + 1) * recent_cpu  + nice */
 static void thread_update_recent_cpu(struct thread *t) {
   t->recent_cpu = ADD_FP_INT(
       MULT_FP(DIV_FP(MULT_FP_INT(load_avg, 2), ADD_FP_INT(MULT_FP_INT(load_avg, 2), 1)), t->recent_cpu), t->nice);

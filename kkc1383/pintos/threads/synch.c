@@ -106,7 +106,8 @@ void sema_up(struct semaphore *sema) {
   ASSERT(sema != NULL);
 
   old_level = intr_disable();
-  sema->value++;
+
+  sema->value++;  // good
   if (!list_empty(&sema->waiters)) {
     // sema->waiters 중에서 우선순위 최댓값인거 가져와야 함. 비교함수가 반대여서 min을 씀...(최댓값뽑는게맞음)
     struct list_elem *max_elem = list_min(&sema->waiters, thread_priority_less, NULL);
@@ -341,19 +342,19 @@ void cond_init(struct condition *cond) {
    interrupt handler.  This function may be called with
    interrupts disabled, but interrupts will be turned back on if
    we need to sleep. */
-void cond_wait(struct condition *cond, struct lock *lock) {
-  struct semaphore_elem waiter;
+void cond_wait(struct condition *cond, struct lock *lock) {  // 특정 조건에 의해서 대기
+  struct semaphore_elem waiter;                              // 해당 조건을 기다릴 thread 전용 semaphore
 
   ASSERT(cond != NULL);
   ASSERT(lock != NULL);
   ASSERT(!intr_context());
   ASSERT(lock_held_by_current_thread(lock));
 
-  sema_init(&waiter.semaphore, 0);
-  list_push_back(&cond->waiters, &waiter.elem);
-  lock_release(lock);
-  sema_down(&waiter.semaphore);
-  lock_acquire(lock);
+  sema_init(&waiter.semaphore, 0);               // 새로만든 semaphore_elem을 초기화한다.
+  list_push_back(&cond->waiters, &waiter.elem);  // 새로만든 semaphore 를 cond에 추가한다.
+  lock_release(lock);  // 다른 사람이 들어올 수 있도록 lock을 열어 둔다(원자적 이동을 보장하기 위함)
+  sema_down(&waiter.semaphore);  // 내 전용 semaphore가 풀릴 때까지 대기한다.(cond_signal이 풀어줌)
+  lock_acquire(lock);            // 다른 스레드의 배타적 접근을 위해서 대기
 }
 
 /* If any threads are waiting on COND (protected by LOCK), then
@@ -363,7 +364,7 @@ void cond_wait(struct condition *cond, struct lock *lock) {
    An interrupt handler cannot acquire a lock, so it does not
    make sense to try to signal a condition variable within an
    interrupt handler. */
-void cond_signal(struct condition *cond, struct lock *lock UNUSED) {
+void cond_signal(struct condition *cond, struct lock *lock UNUSED) {  // 조건이 변경되었으니 다시 확인해봐라
   ASSERT(cond != NULL);
   ASSERT(lock != NULL);
   ASSERT(!intr_context());
@@ -379,16 +380,19 @@ void cond_signal(struct condition *cond, struct lock *lock UNUSED) {
       struct semaphore_elem *sema_elem = list_entry(e, struct semaphore_elem, elem);
 
       // list_front 쓰기전에 원소가 있는지 없는지 먼저 확인할 것
-      struct thread *waiting_thread = list_entry(list_front(&sema_elem->semaphore.waiters), struct thread, elem);
+      if (list_empty(&sema_elem->semaphore.waiters)) continue;
 
+      // 대기 중인 쓰레드 중에서 가장 우선순위가 높은 쓰레드를 찾는다.
+      struct thread *waiting_thread = list_entry(list_front(&sema_elem->semaphore.waiters), struct thread, elem);
       if (waiting_thread->priority > max_priority) {
         max_priority = waiting_thread->priority;
         max_elem = e;
       }
     }
-    if (max_elem != NULL) {
+    if (max_elem != NULL) {  // 가장 우선순위 높은 쓰레드를 깨운다.
       struct semaphore_elem *max_sema_elem = list_entry(max_elem, struct semaphore_elem, elem);
       list_remove(max_elem);
+      // 해당 조건을 기다리는건 그 쓰레드 전용 semaphore를 기다리는 것으로 구현했으므로 semaphore를 풀어준다.
       sema_up(&max_sema_elem->semaphore);
     }
   }
