@@ -409,7 +409,7 @@ void thread_update_all_priority(void) {
   }
 
   // 혹시 현재 스레드의 우선순위가 레디큐에 있는 쓰레드보다 작거나 같다면 양보해야함
-  if (thread_current()->priority <= max_priority_mlfqs_queue()) {
+  if (thread_current()->priority < max_priority_mlfqs_queue()) {
     if (intr_context()) {
       intr_yield_on_return();
     } else {
@@ -462,7 +462,7 @@ void thread_set_nice(int nice) {
 
   // 만약 자신이 더 이상 최고 priority가 아니면 양보
   /* 조건보고 양보하는 경우 (다른 쓰레드에 의해서 race 발생해서 max가 바뀔수도 있음)*/
-  if (curr->priority <= max_priority_mlfqs_queue()) {
+  if (curr->priority < max_priority_mlfqs_queue()) {
     if (intr_context()) {
       intr_yield_on_return();
     } else {
