@@ -17,6 +17,14 @@
         "synch.h": "c",
         "flags.h": "c",
         "fixed-point.h": "c",
-        "tests.h": "c"
+        "tests.h": "c",
+        "string.h": "c",
+        "exception": "c",
+        "memory_resource": "c",
+        "iosfwd": "c",
+        "new": "c",
+        "ostream": "c",
+        "streambuf": "c",
+        "*.inc": "c"
     }
 }

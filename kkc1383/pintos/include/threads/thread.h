@@ -7,6 +7,7 @@
 
 #include "threads/fixed-point.h"
 #include "threads/interrupt.h"
+#include "threads/synch.h"
 
 #ifdef VM
 #include "vm/vm.h"
@@ -109,6 +110,11 @@ struct thread {
   int nice;           /* CPU를 양보하는 척도 (-20~20) */
   fixed_t recent_cpu; /* 최근 CPU 사용량 (fixed-point)*/
 
+  /* process wait, exit 용 */
+  struct list child_list;     // child_info 의 리스트
+  struct lock children_lock;  // children list 순회할때 race condition 막기 위해
+  tid_t parent_tid;           // 내 부모의 tid
+
 #ifdef USERPROG
   /* Owned by userprog/process.c. */
   uint64_t *pml4; /* Page map level 4 */
@@ -121,6 +127,15 @@ struct thread {
   /* Owned by thread.c. */
   struct intr_frame tf; /* Information for switching */
   unsigned magic;       /* Detects stack overflow. */
+};
+
+struct child_info {
+  /* process wait, exit 용 */
+  tid_t child_tid;              //자식의 tid
+  int exit_status;              //자식의 exit status
+  bool has_exited;              //종료 여부
+  struct semaphore wait_sema;   //이 자식만을 위한 semaphore
+  struct list_elem child_elem;  // child_list의 노드
 };
 
 /* If false (default), use round-robin scheduler.
@@ -166,5 +181,7 @@ void mlfqs_update_priority(struct thread *t);
 bool thread_priority_less(const struct list_elem *, const struct list_elem *, void *);
 bool is_not_idle(struct thread *);
 int max_priority_mlfqs_queue(void);
+
+struct thread *thread_get_by_tid(tid_t tid);  // userprog 추가
 
 #endif /* threads/thread.h */

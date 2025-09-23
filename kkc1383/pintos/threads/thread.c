@@ -46,6 +46,7 @@ static struct thread *initial_thread;
 
 /* Lock used by allocate_tid(). */
 static struct lock tid_lock;
+static struct lock all_list_lock; /* userprog 에서 추가 */
 
 /* Thread destruction requests */
 static struct list destruction_req;
@@ -116,6 +117,7 @@ void thread_init(void) {
 
   /* Init the global thread context */
   lock_init(&tid_lock);
+  lock_init(&all_list_lock);
   list_init(&ready_list);
   list_init(&sleep_list);
   list_init(&all_list);
@@ -130,6 +132,11 @@ void thread_init(void) {
   initial_thread->status = THREAD_RUNNING;  // 이거 순서 매우 중요함
   initial_thread->tid = allocate_tid();
   list_push_front(&all_list, &initial_thread->all_elem);
+
+  /* child_info 용 필드 초기화 */
+  list_init(&initial_thread->child_list);
+  lock_init(&initial_thread->children_lock);
+  initial_thread->parent_tid = 0;  //의미없음.
 
   if (thread_mlfqs) {
     mlfqs_update_priority(initial_thread);  // 첫 main쓰레드 priority 설정(PRI_MAX)
@@ -210,7 +217,27 @@ tid_t thread_create(const char *name, int priority, thread_func *function, void 
   /* Initialize thread. */
   init_thread(t, name, priority);
   tid = t->tid = allocate_tid();
-  list_push_back(&all_list, &t->all_elem);  // all_list에 원소 넣기
+
+  struct thread *curr = thread_current();
+  /* child_info 용 필드 초기화 */
+  list_init(&t->child_list);
+  lock_init(&t->children_lock);
+  t->parent_tid = curr->tid;
+
+  /* child_info 만들어서 부모에게 붙이기 */
+  struct child_info *child = (struct child_info *)malloc(sizeof(struct child_info));
+  if (!child) {  //할당에 실패했을 경우
+    palloc_free_page(t);
+    return TID_ERROR;
+  }
+  child->child_tid = tid;
+  child->exit_status = -1;
+  child->has_exited = false;
+  sema_init(&child->wait_sema, 0);  // wait에서 바로 기다릴 수 있게 0으로 초기화
+
+  lock_acquire(&curr->children_lock);
+  list_push_back(&curr->child_list, &child->child_elem);  //부모 child_list에 child_elem을 push
+  lock_release(&curr->children_lock);
 
   if (thread_mlfqs) {  // mlfqs일 경우
     struct thread *parent = thread_current();
@@ -232,6 +259,8 @@ tid_t thread_create(const char *name, int priority, thread_func *function, void 
   t->tf.ss = SEL_KDSEG;
   t->tf.cs = SEL_KCSEG;
   t->tf.eflags = FLAG_IF;
+
+  list_push_back(&all_list, &t->all_elem);  // all_list에 원소 넣기 (create 함수가 완전히 성공할때만 넣기 위해)
 
   /* Add to run queue. */
   thread_unblock(t);
@@ -793,3 +822,19 @@ int max_priority_mlfqs_queue(void) {  // mlfqs에서 존재하는 ready_thread �
 }
 
 bool is_not_idle(struct thread *t) { return t != idle_thread; }
+
+/* userprog 에서 추가 */
+struct thread *thread_get_by_tid(tid_t tid) {
+  struct list_elem *e;
+
+  lock_acquire(&all_list_lock);
+  for (e = list_begin(&all_list); e != list_end(&all_list); e = list_next(e)) {
+    struct thread *t = list_entry(e, struct thread, all_elem);
+    if (t->tid == tid) {
+      lock_release(&all_list_lock);
+      return t;
+    }
+  }
+  lock_release(&all_list_lock);
+  return NULL;
+}
