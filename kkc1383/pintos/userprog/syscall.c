@@ -177,7 +177,7 @@ static int system_open(const char *file) {
 
   //빈 공간 찾기
   int new_fd = -1;
-  for (int i = 2; i < curr->fd_size; i++) {
+  for (int i = 0; i < curr->fd_size; i++) {
     if (!curr->fd_table[i]) {
       new_fd = i;  //빈공간에 new_fd 설정
       break;
@@ -192,9 +192,9 @@ static int system_open(const char *file) {
       lock_release(&filesys_lock);
       return -1;  //-1 리턴하고 종료
     }
-    new_fd = curr->fd_size;  //확장 후 new_fd 설정
+    new_fd = curr->fd_max + 1;  //확장 후 new_fd 설정
   }
-  if (curr->fd_max < new_fd) new_fd = curr->fd_max + 1;  // fd_max 갱신
+  if (curr->fd_max < new_fd) curr->fd_max = new_fd;  // fd_max 갱신
 
   curr->fd_table[new_fd] = open_file;
   // rox 구현

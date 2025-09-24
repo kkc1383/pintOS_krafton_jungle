@@ -260,7 +260,7 @@ tid_t thread_create(const char *name, int priority, thread_func *function, void 
   t->fd_table = (struct file **)calloc(curr->fd_size, sizeof(struct file *));
   if (t->fd_table == NULL) {  // calloc 실패 시
     palloc_free_page(t);
-    free(child);
+    // free(child);
     return TID_ERROR;
   }
   t->fd_table[0] = std_in;   // 표준 입력
