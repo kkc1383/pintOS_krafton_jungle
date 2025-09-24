@@ -142,6 +142,7 @@ struct child_info {
   tid_t child_tid;              //자식의 tid
   int exit_status;              //자식의 exit status
   bool has_exited;              //종료 여부
+  bool fork_success;            // fork 성공여부
   struct semaphore wait_sema;   //이 자식만을 위한 semaphore
   struct list_elem child_elem;  // child_list의 노드
 };

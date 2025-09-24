@@ -25,6 +25,8 @@
         "new": "c",
         "ostream": "c",
         "streambuf": "c",
-        "*.inc": "c"
+        "*.inc": "c",
+        "syscall.h": "c",
+        "stdbool.h": "c"
     }
 }

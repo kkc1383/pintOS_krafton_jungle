@@ -239,6 +239,7 @@ tid_t thread_create(const char *name, int priority, thread_func *function, void 
   child->child_tid = tid;
   child->exit_status = -1;
   child->has_exited = false;
+  child->fork_success = false;      // false로 초기화
   sema_init(&child->wait_sema, 0);  // wait에서 바로 기다릴 수 있게 0으로 초기화
 
   lock_acquire(&curr->children_lock);

@@ -25,10 +25,16 @@
 #include "vm/vm.h"
 #endif
 
+struct fork_aux {
+  struct thread *parent;         //부모 프로세스 구조체
+  struct intr_frame *parent_if;  // 부모 프로세스의 레지스터 정보
+  struct semaphore fork_sema;    // fork가 끝날때까지 기다리게 하려고 semaphore
+};
+
 static void process_cleanup(void);
 static bool load(const char **argv, struct intr_frame *if_);
 static void initd(void *f_name);
-static void __do_fork(void *);
+static void __do_fork(struct fork_aux *);
 
 /* General process initializer for initd and other process. */
 static void process_init(void) { struct thread *current = thread_current(); }
@@ -80,9 +86,43 @@ static void initd(void *f_name) {
 
 /* Clones the current process as `name`. Returns the new process's thread id, or
  * TID_ERROR if the thread cannot be created. */
-tid_t process_fork(const char *name, struct intr_frame *if_ UNUSED) {
-  /* Clone current thread to new thread.*/
-  return thread_create(name, PRI_DEFAULT, __do_fork, thread_current());
+tid_t process_fork(const char *name, struct intr_frame *if_) {
+  // do_fork에 넘길 인자 구조체 생성
+  struct fork_aux *aux = (struct fork_aux *)malloc(sizeof(struct fork_aux));
+  if (!aux) return TID_ERROR;
+  aux->parent = thread_current();
+  aux->parent_if = if_;
+  sema_init(&aux->fork_sema, 0);
+
+  tid_t tid;
+  tid = thread_create(name, PRI_DEFAULT, __do_fork, aux);
+  if (tid == TID_ERROR) {
+    free(aux);
+    return TID_ERROR;
+  }
+  sema_down(&aux->fork_sema);  // fork 가 정상적으로 끝날 때까지 대기
+
+  // tid 검사 (fork 루틴 중 성공/실패 여부 확인)
+  lock_acquire(&aux->parent->children_lock);
+  // child_list 순회
+  struct list_elem *e;
+  for (e = list_begin(&aux->parent->child_list); e != list_end(&aux->parent->child_list); e = list_next(e)) {
+    struct child_info *child = list_entry(e, struct child_info, child_elem);
+    if (child->child_tid == tid) {
+      if (child->has_exited && !child->fork_success) {
+        // do fork 중에 자식이 종료되었다면
+        lock_release(&aux->parent->children_lock);  //락풀고
+        free(aux);                                  // aux 메모리 반환
+        return TID_ERROR;
+      }
+      break;
+    }
+  }
+  lock_release(&aux->parent->children_lock);
+
+  // do_fork가 정상적으로 이루어졌다면
+  free(aux);
+  return tid;
 }
 
 #ifndef VM
@@ -96,21 +136,32 @@ static bool duplicate_pte(uint64_t *pte, void *va, void *aux) {
   bool writable;
 
   /* 1. TODO: If the parent_page is kernel page, then return immediately. */
+  if (is_kern_pte(pte))  // 해당 pte가 커널 페이지일 경우
+    return true;         // 커널 페이지는 공유하므로 건너 뜀
 
   /* 2. Resolve VA from the parent's page map level 4. */
   parent_page = pml4_get_page(parent->pml4, va);
+  if (!parent_page)  // va로부터 부모 페이지를 가져와야하는데 없는 페이지라면
+    return false;    // fork 중단
 
   /* 3. TODO: Allocate new PAL_USER page for the child and set result to
    *    TODO: NEWPAGE. */
+  newpage = palloc_get_page(PAL_USER);
+  if (!newpage)  //메모리 할당 실패
+    return false;
 
   /* 4. TODO: Duplicate parent's page to the new page and
    *    TODO: check whether parent's page is writable or not (set WRITABLE
    *    TODO: according to the result). */
+  memcpy(newpage, parent_page, PGSIZE);  // 부모페이지에서, 자식 새 페이지로 데이터 옮기기
+  writable = is_writable(pte);           // 전달받은 pte로부터 부모페이지의 writable값을 전달받기
 
   /* 5. Add new page to child's page table at address VA with WRITABLE
    *    permission. */
   if (!pml4_set_page(current->pml4, va, newpage, writable)) {
     /* 6. TODO: if fail to insert page, do error handling. */
+    palloc_free_page(newpage);
+    return false;
   }
   return true;
 }
@@ -120,16 +171,17 @@ static bool duplicate_pte(uint64_t *pte, void *va, void *aux) {
  * Hint) parent->tf does not hold the userland context of the process.
  *       That is, you are required to pass second argument of process_fork to
  *       this function. */
-static void __do_fork(void *aux) {
+static void __do_fork(struct fork_aux *aux) {
   struct intr_frame if_;
-  struct thread *parent = (struct thread *)aux;
+  struct thread *parent = aux->parent;
   struct thread *current = thread_current();
   /* TODO: somehow pass the parent_if. (i.e. process_fork()'s if_) */
-  struct intr_frame *parent_if;
+  struct intr_frame *parent_if = aux->parent_if;
   bool succ = true;
 
   /* 1. Read the cpu context to local stack. */
   memcpy(&if_, parent_if, sizeof(struct intr_frame));
+  if_.R.rax = 0;  // 자식의 fork 반환 값은 0으로 설정
 
   /* 2. Duplicate PT */
   current->pml4 = pml4_create();
@@ -148,12 +200,35 @@ static void __do_fork(void *aux) {
    * TODO:       in include/filesys/file.h. Note that parent should not return
    * TODO:       from the fork() until this function successfully duplicates
    * TODO:       the resources of parent.*/
+  for (int i = 2; i <= parent->fd_max; i++) {
+    if (!parent->fd_table[i]) continue;                           //등록안된 fd라면 건너뛰기
+    struct file *new_file = file_duplicate(parent->fd_table[i]);  //부모 fdtable에서 복제해오기
+    if (!new_file) goto error;  // file_duplicate 데이터 할당에 실패했다면 error로 가서 종료
+    //복제에 성공했다면
+    current->fd_table[i] = new_file;  //현재 스레드의 fdtable 채우기
+    current->fd_max = i;              // fd_max 갱신
+  }
+  // process_init(); //왜 있는지 전혀 모르겠는 함수 일단 지웁시다.
 
-  process_init();
+  /* 정상적으로 fork 되었음을 알림 */
+  lock_acquire(&parent->children_lock);
+  // child_list 순회
+  struct list_elem *e;
+  for (e = list_begin(&parent->child_list); e != list_end(&parent->child_list); e = list_next(e)) {
+    struct child_info *child = list_entry(e, struct child_info, child_elem);
+    if (child->child_tid == current->tid) {
+      child->fork_success = true;
+      break;
+    }
+  }
+  lock_release(&parent->children_lock);
+
+  sema_up(&aux->fork_sema);  // fork 가 정상적으로 이루어 졌으므로 sema풀기
 
   /* Finally, switch to the newly created process. */
   if (succ) do_iret(&if_);
 error:
+  sema_up(&aux->fork_sema);  // fork가 실패했지만 부모 프로세스의 기다림은 풀어줘야하니
   thread_exit();
 }
 
@@ -170,8 +245,7 @@ int process_exec(void *f_name) {
     argv[i] = malloc((strlen(token) + 1) * sizeof(char));  // 인자 하나 당 한 줄씩 할당
     memcpy(argv[i++], token, strlen(token) + 1);           // 값 옮겨 쓰기, 널 문자 포함해서 복사
   }
-  argv[i] = NULL;            //마지막 인자는 무조건 NULL로 마무리
-  palloc_free_page(f_name);  // memcpy로 다 옮겼으니 넘겨 받은것은 free
+  argv[i] = NULL;  //마지막 인자는 무조건 NULL로 마무리
   /* argument parsing end */
 
   char *file_name = argv[0];
@@ -226,7 +300,6 @@ int process_wait(tid_t child_tid UNUSED) {
     struct child_info *child = list_entry(e, struct child_info, child_elem);
     if (child->child_tid == child_tid) {  // tid로 기다리려는 자식 찾기
       target_child = child;
-      child_exit_status = target_child->exit_status;
       break;
     }
   }
@@ -239,6 +312,8 @@ int process_wait(tid_t child_tid UNUSED) {
   lock_acquire(&curr->children_lock);
   list_remove(&target_child->child_elem);
   lock_release(&curr->children_lock);
+
+  child_exit_status = target_child->exit_status;  // exit_status 저장
   free(target_child);
   return child_exit_status;
 }
@@ -250,23 +325,6 @@ void process_exit(void) {
    * TODO: project2/process_termination.html).
    * TODO: We recommend you to implement process resource cleanup here. */
 
-  struct thread *curr = thread_current();
-  struct thread *parent = thread_get_by_tid(curr->parent_tid);
-  if (!parent) return;
-
-  lock_acquire(&parent->children_lock);  // child_list 순회하기 때문에
-  // tid로 child_info list에서 본인 노드 찾기
-  struct list_elem *e;
-  for (e = list_begin(&parent->child_list); e != list_end(&parent->child_list); e = list_next(e)) {
-    struct child_info *child = list_entry(e, struct child_info, child_elem);
-    if (child->child_tid == curr->tid) {  // 본인노드 찾아서 semaup 하기
-      child->exit_status = curr->status;
-      child->has_exited = true;
-      sema_up(&child->wait_sema);
-      break;
-    }
-  }
-  lock_release(&parent->children_lock);  // child_list 순회하기 때문에
   process_cleanup();
 }
 

@@ -11,16 +11,16 @@
 #include "threads/loader.h"
 #include "threads/thread.h"
 #include "userprog/gdt.h"
+#include "userprog/process.h"
 
 void syscall_entry(void);
 void syscall_handler(struct intr_frame *);
 
 /* system call */
 static void system_halt(void);
-static void system_exit(int status);
-// static pid_t system_fork(const char *thread_name, struct intr_frame *f);
+static pid_t system_fork(const char *thread_name, struct intr_frame *f);
 static int system_exec(const char *cmdd_line);
-// static int system_wait(pid_t pid);
+static int system_wait(pid_t pid);
 static bool system_create(const char *file, unsigned initial_size);
 static bool system_remove(const char *file);
 static int system_open(const char *file);
@@ -69,21 +69,21 @@ void syscall_handler(struct intr_frame *f UNUSED) {
     case SYS_EXIT:
       system_exit(f->R.rdi);
       break;
-    // case SYS_FORK:
-    //   f->R.rax = system_fork(f->R.rdi, f);
-    //   break;
-    // case SYS_EXEC:
-    //   f->R.rax = system_exec(f->R.rdi);
-    //   break;
-    // case SYS_WAIT:
-    //   f->R.rax = system_wait(f->R.rdi);
-    //   break;
+    case SYS_FORK:
+      f->R.rax = system_fork(f->R.rdi, f);
+      break;
+    case SYS_EXEC:
+      f->R.rax = system_exec(f->R.rdi);
+      break;
+    case SYS_WAIT:
+      f->R.rax = system_wait(f->R.rdi);
+      break;
     case SYS_CREATE:
       f->R.rax = system_create(f->R.rdi, f->R.rsi);
       break;
-    // case SYS_REMOVE:
-    //   f->R.rax = system_remove(f->R.rdi);
-    //   break;
+    case SYS_REMOVE:
+      f->R.rax = system_remove(f->R.rdi);
+      break;
     case SYS_OPEN:
       f->R.rax = system_open(f->R.rdi);
       break;
@@ -96,12 +96,12 @@ void syscall_handler(struct intr_frame *f UNUSED) {
     case SYS_WRITE:
       f->R.rax = system_write(f->R.rdi, f->R.rsi, f->R.rdx);
       break;
-    // case SYS_SEEK:
-    //   system_seek(f->R.rdi, f->R.rsi);
-    //   break;
-    // case SYS_TELL:
-    //   f->R.rax = system_tell(f->R.rdi);
-    //   break;
+    case SYS_SEEK:
+      system_seek(f->R.rdi, f->R.rsi);
+      break;
+    case SYS_TELL:
+      f->R.rax = system_tell(f->R.rdi);
+      break;
     case SYS_CLOSE:
       system_close(f->R.rdi);
       break;
@@ -115,7 +115,7 @@ void syscall_handler(struct intr_frame *f UNUSED) {
   }
 }
 static void system_halt(void) { power_off(); }
-static void system_exit(int status) {
+void system_exit(int status) {
   /* child_list에 종료되었음을 기록, status, has_exited 등 */
   // 여기에 한 이유는 status가 process_exit()까지 못간다. 인자로 넘기려니 고칠게 너무많음.
   struct thread *curr = thread_current();
@@ -140,6 +140,15 @@ static void system_exit(int status) {
   printf("%s: exit(%d)\n", curr->name, status);
   thread_exit();
 }
+static pid_t system_fork(const char *thread_name, struct intr_frame *f) { return process_fork(thread_name, f); }
+static int system_exec(const char *cmdd_line) {
+  validate_user_string(cmdd_line);
+  int result = process_exec(cmdd_line);
+  system_exit(result);
+  // never reached!!
+  return result;  // 실패했을 경우에만 반환
+}
+static int system_wait(pid_t pid) { return process_wait(pid); }
 static bool system_create(const char *file, unsigned initial_size) {
   validate_user_string(file);  // file이 널 문자인지, 혹은 페이지 테이블에 없는 주소인지
   // 대신에 락이 걸려야함
@@ -147,6 +156,13 @@ static bool system_create(const char *file, unsigned initial_size) {
   bool result = filesys_create(file, initial_size);  // 파일 생성
   lock_release(&filesys_lock);
   return result;  // 파일 생성이 성공적이면 true, 아니면 false
+}
+static bool system_remove(const char *file) {
+  validate_user_string(file);          // file이 널 문자인지, 혹은 페이지 테이블에 없는 주소인지
+  lock_acquire(&filesys_lock);         // 동시접근을 막기 위해
+  bool result = filesys_remove(file);  // 파일 삭제
+  lock_release(&filesys_lock);
+  return result;  // 파일 삭제가 성공적이면 true, 아니면 false
 }
 static int system_open(const char *file) {
   validate_user_string(file);   // file 이 널문자인지, 혹은 페이지 테이블에 없는 주소인지
@@ -160,6 +176,10 @@ static int system_open(const char *file) {
   int new_fd = ++(curr->fd_max);  // fd_max에 1더한 값을 new_fd로 준다
 
   curr->fd_table[new_fd] = open_file;
+
+  // rox 구현
+  if (!strcmp(curr->name, file)) file_deny_write(open_file);  // 본인 자신을 열려고 하면 deny_write 설정
+
   return new_fd;
 }
 static int system_filesize(int fd) {
@@ -203,11 +223,33 @@ static int system_write(int fd, const void *buffer, unsigned size) {
     int write_bytes;
     struct file *write_file = curr->fd_table[fd];
     if (!write_file) return -1;
+    if (write_file->deny_write) return 0;
     lock_acquire(&filesys_lock);  // 동시접근을 막기 위해
     write_bytes = file_write(write_file, buffer, size);
     lock_release(&filesys_lock);
     return write_bytes;
   }
+}
+static void system_seek(int fd, unsigned position) {
+  struct thread *curr = thread_current();
+  if (fd < 0 || fd >= curr->fd_size) return;  // fd가 유효하지 않은 숫자일 경우
+  struct file *seek_file = curr->fd_table[fd];
+  if (!seek_file) return;  // fd size 이내의 숫자이지만 열린 fd가 아니라면 리턴
+
+  lock_acquire(&filesys_lock);  // 동시접근을 막기 위해
+  file_seek(seek_file, position);
+  lock_release(&filesys_lock);
+}
+static unsigned system_tell(int fd) {
+  struct thread *curr = thread_current();
+  if (fd < 0 || fd >= curr->fd_size) return 0;  // fd가 유효하지 않은 숫자일 경우
+  struct file *tell_file = curr->fd_table[fd];
+  if (!tell_file) return 0;  // fd size 이내의 숫자이지만 열린 fd가 아니라면 리턴
+
+  lock_acquire(&filesys_lock);  // 동시접근을 막기 위해
+  unsigned tell_bytes = file_tell(tell_file);
+  lock_release(&filesys_lock);
+  return tell_bytes;
 }
 static void system_close(int fd) {
   struct thread *curr = thread_current();
