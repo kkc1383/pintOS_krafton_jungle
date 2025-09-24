@@ -32,6 +32,7 @@ static unsigned system_tell(int fd);
 static void system_close(int fd);
 
 static void validate_user_string(const char *str);
+static int expend_fd_table(struct thread *curr, size_t size);
 
 /* System call.
  *
@@ -173,9 +174,20 @@ static int system_open(const char *file) {
 
   // fd 할당
   struct thread *curr = thread_current();
-  int new_fd = ++(curr->fd_max);  // fd_max에 1더한 값을 new_fd로 준다
+
+  if (curr->fd_max + 1 >= curr->fd_size) {  // 확장이 필요하다면
+    if (expend_fd_table(curr, 1) < 0) {
+      // 확장 실패 했다면
+      lock_acquire(&filesys_lock);
+      file_close(open_file);  //파일 닫고
+      lock_release(&filesys_lock);
+      return -1;  //-1 리턴하고 종료
+    }
+  }
+  int new_fd = curr->fd_max + 1;  // 다음 fd 계산
 
   curr->fd_table[new_fd] = open_file;
+  curr->fd_max = new_fd;  // fd_max 갱신
 
   // rox 구현
   if (!strcmp(curr->name, file)) file_deny_write(open_file);  // 본인 자신을 열려고 하면 deny_write 설정
@@ -270,4 +282,18 @@ static void validate_user_string(const char *str) {
   if (pml4_get_page(thread_current()->pml4, str) == NULL) {  // 해당 프로세스의 page테이블에 등록되어 있지 않는 주소라면
     system_exit(-1);                                         //종료
   }
+}
+static int expend_fd_table(struct thread *curr, size_t size) {  // MAXFILES의 배수로 ㄱㄱ
+  // if (curr->fd_size >= 512) return -1;                          //크기 제한
+  size_t size_cnt = size / MAX_FILES + 1;
+  size_t expend_size = size_cnt * MAX_FILES;
+  // MAX_FILES의 배수만큼만 확장
+  struct file **new_table =
+      (struct file **)calloc((curr->fd_size + expend_size), sizeof(struct file *));  //새로 이사갈 주소
+  if (new_table == NULL) return -1;                                                  //재할당에 실패했을 경우
+  memcpy(new_table, curr->fd_table, curr->fd_size * sizeof(struct file *));          // 메모리 이사(값 옮기기)
+  free(curr->fd_table);                                                              // 기존에 있던 곳 free
+  curr->fd_table = new_table;
+  curr->fd_size += expend_size;
+  return 0;  // 성공적일 경우 0반환
 }

@@ -19,6 +19,7 @@
 #include "threads/thread.h"
 #include "threads/vaddr.h"
 #include "userprog/gdt.h"
+#include "userprog/syscall.h"
 #include "userprog/tss.h"
 
 #ifdef VM
@@ -101,7 +102,6 @@ tid_t process_fork(const char *name, struct intr_frame *if_) {
     return TID_ERROR;
   }
   sema_down(&aux->fork_sema);  // fork 가 정상적으로 끝날 때까지 대기
-
   // tid 검사 (fork 루틴 중 성공/실패 여부 확인)
   lock_acquire(&aux->parent->children_lock);
   // child_list 순회
@@ -229,7 +229,7 @@ static void __do_fork(struct fork_aux *aux) {
   if (succ) do_iret(&if_);
 error:
   sema_up(&aux->fork_sema);  // fork가 실패했지만 부모 프로세스의 기다림은 풀어줘야하니
-  thread_exit();
+  system_exit(-1);
 }
 
 /* Switch the current execution context to the f_name.
@@ -326,6 +326,13 @@ void process_exit(void) {
    * TODO: We recommend you to implement process resource cleanup here. */
 
   process_cleanup();
+  struct thread *curr = thread_current();
+  for (int i = 2; i <= curr->fd_max; i++) {
+    if (!curr->fd_table[i]) continue;
+    file_close(curr->fd_table[i]);  // 각 fd별 file_close
+    curr->fd_table[i] = NULL;
+  }
+  free(curr->fd_table);  // fd_table 껍데기 반환
 }
 
 /* Free the current process's resources. */
@@ -538,7 +545,7 @@ static bool load(const char **argv, struct intr_frame *if_) {
   if_->R.rsi = if_->rsp;                  // rsi에 스택포인터 주소 집어넣기
   if_->rsp = memset(if_->rsp - 8, 0, 8);  // return address
   success = true;
-
+  free(moved_argv_ptr);
 done:
   /* We arrive here whether the load is successful or not. */
   file_close(file);

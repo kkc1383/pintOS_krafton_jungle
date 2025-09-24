@@ -245,15 +245,14 @@ tid_t thread_create(const char *name, int priority, thread_func *function, void 
   lock_acquire(&curr->children_lock);
   list_push_back(&curr->child_list, &child->child_elem);  //부모 child_list에 child_elem을 push
   lock_release(&curr->children_lock);
-
-  t->fd_table = (struct file **)calloc(MAX_FILES, sizeof(struct file *));
-  if (!t->fd_table) {  // calloc 실패 시
+  t->fd_table = (struct file **)calloc(curr->fd_size, sizeof(struct file *));
+  if (t->fd_table == NULL) {  // calloc 실패 시
     palloc_free_page(t);
     free(child);
     return TID_ERROR;
   }
   t->fd_max = 1;  // 0,1은 예약 이므로
-  t->fd_size = MAX_FILES;
+  t->fd_size = curr->fd_size;
 
   if (thread_mlfqs) {  // mlfqs일 경우
     struct thread *parent = thread_current();
@@ -276,8 +275,9 @@ tid_t thread_create(const char *name, int priority, thread_func *function, void 
   t->tf.cs = SEL_KCSEG;
   t->tf.eflags = FLAG_IF;
 
+  lock_acquire(&all_list_lock);
   list_push_back(&all_list, &t->all_elem);  // all_list에 원소 넣기 (create 함수가 완전히 성공할때만 넣기 위해)
-
+  lock_release(&all_list_lock);
   /* Add to run queue. */
   thread_unblock(t);
 
@@ -373,7 +373,9 @@ void thread_exit(void) {
   /* Just set our status to dying and schedule another process.
      We will be destroyed during the call to schedule_tail(). */
   intr_disable();
+  lock_acquire(&all_list_lock);
   list_remove(&thread_current()->all_elem);  // all_list에서 제거
+  lock_release(&all_list_lock);
   do_schedule(THREAD_DYING);
   NOT_REACHED();
 }
