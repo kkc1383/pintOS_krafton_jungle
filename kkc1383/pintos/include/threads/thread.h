@@ -193,4 +193,8 @@ int max_priority_mlfqs_queue(void);
 
 struct thread *thread_get_by_tid(tid_t tid);  // userprog 추가
 
+struct file *init_std();
+struct file *get_std_in();   // userprog 추가
+struct file *get_std_out();  // userprog 추가
+
 #endif /* threads/thread.h */

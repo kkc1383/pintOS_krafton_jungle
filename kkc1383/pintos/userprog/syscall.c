@@ -29,7 +29,7 @@ static int system_read(int fd, void *buffer, unsigned size);
 static int system_write(int fd, const void *buffer, unsigned size);
 static void system_seek(int fd, unsigned position);
 static unsigned system_tell(int fd);
-static void system_close(int fd);
+static int system_dup2(int oldfd, int newfd);
 
 static void validate_user_string(const char *str);
 static int expend_fd_table(struct thread *curr, size_t size);
@@ -106,9 +106,9 @@ void syscall_handler(struct intr_frame *f UNUSED) {
     case SYS_CLOSE:
       system_close(f->R.rdi);
       break;
-    // case SYS_DUP2:
-    //   f->R.rax = system_dup2(f->R.rdi, f->R.rsi);
-    //   break;
+    case SYS_DUP2:
+      f->R.rax = system_dup2(f->R.rdi, f->R.rsi);
+      break;
     default:
       printf("unknown! %d\n", f->R.rax);
       thread_exit();
@@ -175,7 +175,16 @@ static int system_open(const char *file) {
   // fd 할당
   struct thread *curr = thread_current();
 
-  if (curr->fd_max + 1 >= curr->fd_size) {  // 확장이 필요하다면
+  //빈 공간 찾기
+  int new_fd = -1;
+  for (int i = 2; i < curr->fd_size; i++) {
+    if (!curr->fd_table[i]) {
+      new_fd = i;  //빈공간에 new_fd 설정
+      break;
+    }
+  }
+
+  if (new_fd == -1) {  // 확장이 필요하다면
     if (expend_fd_table(curr, 1) < 0) {
       // 확장 실패 했다면
       lock_acquire(&filesys_lock);
@@ -183,12 +192,11 @@ static int system_open(const char *file) {
       lock_release(&filesys_lock);
       return -1;  //-1 리턴하고 종료
     }
+    new_fd = curr->fd_size;  //확장 후 new_fd 설정
   }
-  int new_fd = curr->fd_max + 1;  // 다음 fd 계산
+  if (curr->fd_max < new_fd) new_fd = curr->fd_max + 1;  // fd_max 갱신
 
   curr->fd_table[new_fd] = open_file;
-  curr->fd_max = new_fd;  // fd_max 갱신
-
   // rox 구현
   if (!strcmp(curr->name, file)) file_deny_write(open_file);  // 본인 자신을 열려고 하면 deny_write 설정
 
@@ -197,8 +205,10 @@ static int system_open(const char *file) {
 static int system_filesize(int fd) {
   struct thread *curr = thread_current();
   if (fd < 0 || fd >= curr->fd_size) return -1;  // fd가 유효하지 않은 숫자일 경우
-  int file_size = -1;                            //해당 fd에 파일이 없을때 -1 리턴하기 위해
-  if (curr->fd_table[fd]) {                      //해당 fd에 파일이 있다면
+  if (curr->fd_table[fd] == get_std_in() || curr->fd_table[fd] == get_std_out())  // 표준 입출력일 경우
+    return -1;                                                                    // -1 리턴하고 종료
+  int file_size = -1;        //해당 fd에 파일이 없을때 -1 리턴하기 위해
+  if (curr->fd_table[fd]) {  //해당 fd에 파일이 있다면
     lock_acquire(&filesys_lock);
     file_size = file_length(curr->fd_table[fd]);
     lock_release(&filesys_lock);
@@ -211,8 +221,10 @@ static int system_read(int fd, void *buffer, unsigned size) {
   validate_user_string(buffer);
 
   int read_bytes;
-  if (fd == 0) {  //표준입력인 경우
+  if (curr->fd_table[fd] == get_std_in()) {  //표준입력인 경우
     read_bytes = input_getc();
+  } else if (curr->fd_table[fd] == get_std_out()) {  // 표준 출력일 경우 잘못된 접근이므로 -1리턴
+    return -1;
   } else {
     struct file *read_file = curr->fd_table[fd];
     if (!read_file) return -1;
@@ -228,9 +240,11 @@ static int system_write(int fd, const void *buffer, unsigned size) {
   if (fd < 0 || fd >= curr->fd_size) return -1;  // fd가 유효하지 않은 숫자일 경우
   validate_user_string(buffer);
 
-  if (fd == 1) {
+  if (curr->fd_table[fd] == get_std_out()) {  // 표준 출력일 경우
     putbuf(buffer, size);
     return size;
+  } else if (curr->fd_table[fd] == get_std_in()) {  //표준 입력일 경우 잘못된 접근이므로 -1 리턴
+    return -1;
   } else {
     int write_bytes;
     struct file *write_file = curr->fd_table[fd];
@@ -245,6 +259,9 @@ static int system_write(int fd, const void *buffer, unsigned size) {
 static void system_seek(int fd, unsigned position) {
   struct thread *curr = thread_current();
   if (fd < 0 || fd >= curr->fd_size) return;  // fd가 유효하지 않은 숫자일 경우
+  if (curr->fd_table[fd] == get_std_in() ||
+      curr->fd_table[fd] == get_std_out())  // 표준 입출력은 잘못된 접근이므로 -1 리턴
+    return -1;
   struct file *seek_file = curr->fd_table[fd];
   if (!seek_file) return;  // fd size 이내의 숫자이지만 열린 fd가 아니라면 리턴
 
@@ -255,6 +272,9 @@ static void system_seek(int fd, unsigned position) {
 static unsigned system_tell(int fd) {
   struct thread *curr = thread_current();
   if (fd < 0 || fd >= curr->fd_size) return 0;  // fd가 유효하지 않은 숫자일 경우
+  if (curr->fd_table[fd] == get_std_in() ||
+      curr->fd_table[fd] == get_std_out())  // 표준 입출력은 잘못된 접근이므로 -1 리턴
+    return -1;
   struct file *tell_file = curr->fd_table[fd];
   if (!tell_file) return 0;  // fd size 이내의 숫자이지만 열린 fd가 아니라면 리턴
 
@@ -263,16 +283,51 @@ static unsigned system_tell(int fd) {
   lock_release(&filesys_lock);
   return tell_bytes;
 }
-static void system_close(int fd) {
+void system_close(int fd) {
   struct thread *curr = thread_current();
   if (fd < 0 || fd >= curr->fd_size) return;  // fd가 유효하지 않은 숫자일 경우
   struct file *close_file = curr->fd_table[fd];
   if (!close_file) return;  // fd size 이내의 숫자이지만 열린 fd가 아니라면 리턴
 
-  lock_acquire(&filesys_lock);  // 동시접근을 막기 위해
-  file_close(close_file);       // file 닫아주기
-  lock_release(&filesys_lock);
+  if (curr->fd_table[fd] != get_std_in() && curr->fd_table[fd] != get_std_out()) {  // 표준 입출력이 아닐 경우
+    if (close_file->dup_count >= 2) {  // 누군가 dup2 되어있을 경우
+      close_file->dup_count--;         // dup_count만 내려줍니다.
+    } else {
+      lock_acquire(&filesys_lock);  // 동시접근을 막기 위해
+      file_close(close_file);       // file 닫아주기
+      lock_release(&filesys_lock);
+    }
+  }
   curr->fd_table[fd] = NULL;  // fd_table에서 빼주기
+}
+static int system_dup2(int oldfd, int newfd) {
+  struct thread *curr = thread_current();
+  // oldfd가 유효한 파일 디스크립터가 아니라면 -1 반환 후 종료, newfd가 음수여도 종료
+  if (oldfd < 0 || curr->fd_table[oldfd] == NULL || newfd < 0) return -1;
+  // oldfd == newfd 라면 그냥 newfd 반환 후 별도 동작없이 종료
+  if (oldfd == newfd) return newfd;
+
+  /* newfd가 열려있는 fd라면 fd 닫기 (newfd에 파일이 없거나, 표준 입출력일 경우는 제외)*/
+  if (curr->fd_table[newfd] != NULL && newfd <= curr->fd_max) {
+    system_close(newfd);
+  }
+  /* 본격적인 dup2 동작 */
+
+  // newfd가 현재 fd_table에 없는 숫자일 경우 확장
+  if (newfd >= curr->fd_size) {
+    if (expend_fd_table(curr, newfd - curr->fd_size + 1) < 0)
+      return -1;  //필요한 만큼만 확장(알아서 MAX_FILES 정렬해줌)
+  }
+  // oldfd가 표준 입출력일 경우 그냥 가져오기만 하면됨
+  if (curr->fd_table[oldfd] == get_std_in() || curr->fd_table[oldfd] == get_std_out()) {
+    curr->fd_table[newfd] = curr->fd_table[oldfd];
+  } else {  //일반 파일일 경우
+    struct file *dup_file = curr->fd_table[oldfd];
+    curr->fd_table[newfd] = dup_file;  // 그냥 포인터만 가져옴
+    dup_file->dup_count++;             // dup_count 증가
+  }
+  if (newfd > curr->fd_max) curr->fd_max = newfd;  // fd_max 갱신
+  return newfd;
 }
 
 static void validate_user_string(const char *str) {

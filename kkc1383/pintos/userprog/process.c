@@ -200,13 +200,36 @@ static void __do_fork(struct fork_aux *aux) {
    * TODO:       in include/filesys/file.h. Note that parent should not return
    * TODO:       from the fork() until this function successfully duplicates
    * TODO:       the resources of parent.*/
-  for (int i = 2; i <= parent->fd_max; i++) {
-    if (!parent->fd_table[i]) continue;                           //등록안된 fd라면 건너뛰기
-    struct file *new_file = file_duplicate(parent->fd_table[i]);  //부모 fdtable에서 복제해오기
-    if (!new_file) goto error;  // file_duplicate 데이터 할당에 실패했다면 error로 가서 종료
-    //복제에 성공했다면
-    current->fd_table[i] = new_file;  //현재 스레드의 fdtable 채우기
-    current->fd_max = i;              // fd_max 갱신
+  for (int i = 0; i <= parent->fd_max; i++) {
+    if (!parent->fd_table[i]) continue;  //등록안된 fd라면 건너뛰기
+    if (parent->fd_table[i] == get_std_in() || parent->fd_table[i] == get_std_out()) {  // 표준 입출력일 경우
+      current->fd_table[i] = parent->fd_table[i];
+    } else {                                      // 일반 파일일 경우
+      if (parent->fd_table[i]->dup_count >= 2) {  // dup2 관게인 file일 경우
+
+        /* 앞 index 중에서 이미 복제된 fd가 있다면 참조만 함*/
+        bool has_duplicated = false;
+        for (int j = 0; j < i; j++) {
+          if (parent->fd_table[i] == parent->fd_table[j]) {
+            has_duplicated = true;
+            current->fd_table[i] = current->fd_table[j];
+            current->fd_table[j]->dup_count++;
+            break;  //찾았으니 그만 탐색
+          }
+        }
+
+        if (!has_duplicated) {  // 이 인덱스가 첫 주자일 경우 파일 복제
+          struct file *new_file = file_duplicate(parent->fd_table[i]);
+          if (!new_file) goto error;
+          current->fd_table[i] = new_file;
+        }
+      } else {  // dup2 관계가 아닐 경우 그냥 복자
+        struct file *new_file = file_duplicate(parent->fd_table[i]);
+        if (!new_file) goto error;
+        current->fd_table[i] = new_file;
+      }
+    }
+    current->fd_max = i;  // fd_max 갱신
   }
   // process_init(); //왜 있는지 전혀 모르겠는 함수 일단 지웁시다.
 
@@ -266,7 +289,7 @@ int process_exec(void *f_name) {
   success = load(argv, &_if);
 
   /* If load failed, quit. */
-  for (int j = 0; j <= i; j++) {  //위에서 사용한 i 그대로 이용 각 줄별로 malloc 한거 반환
+  for (int j = 0; j < i; j++) {  //위에서 사용한 i 그대로 이용 각 줄별로 malloc 한거 반환
     free(argv[j]);
   }
   palloc_free_page(argv);  // argv 통짜 껍데기 반환
@@ -304,15 +327,13 @@ int process_wait(tid_t child_tid UNUSED) {
     }
   }
   lock_release(&curr->children_lock);
-  if (!target_child) return -1;  // 찾는 자식이 없다면 -1
-
+  if (!target_child) return -1;                                                // 찾는 자식이 없다면 -1
   if (target_child->has_exited == false) sema_down(&target_child->wait_sema);  //자식이 종료될 때까지 기다림
 
   // 자식이 종료되었다면 child_list에서 제거 및 메모리 반환
   lock_acquire(&curr->children_lock);
   list_remove(&target_child->child_elem);
   lock_release(&curr->children_lock);
-
   child_exit_status = target_child->exit_status;  // exit_status 저장
   free(target_child);
   return child_exit_status;
@@ -327,12 +348,20 @@ void process_exit(void) {
 
   process_cleanup();
   struct thread *curr = thread_current();
-  for (int i = 2; i <= curr->fd_max; i++) {
+  for (int i = 0; i <= curr->fd_max; i++) {
     if (!curr->fd_table[i]) continue;
-    file_close(curr->fd_table[i]);  // 각 fd별 file_close
-    curr->fd_table[i] = NULL;
+    if (curr->fd_table[i] == get_std_in() || curr->fd_table[i] == get_std_out()) {  //표준 입출력일 경우
+      curr->fd_table[i] = NULL;
+    } else {
+      system_close(i);  // dup2라면 dup_count만 깎을 테고, 아니라면 file_close 해 줌 마지막 NULL 처리도 해줌
+    }
   }
   free(curr->fd_table);  // fd_table 껍데기 반환
+
+  if (!strcmp("main", curr->name)) {  // main 쓰레드 종료할때 표준 입출력 주소 반환
+    free(get_std_in());
+    free(get_std_out());
+  }
 }
 
 /* Free the current process's resources. */

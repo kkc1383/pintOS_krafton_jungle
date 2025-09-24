@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "filesys/file.h"
 #include "intrinsic.h"
 #include "threads/fixed-point.h"
 #include "threads/flags.h"
@@ -67,6 +68,10 @@ static unsigned thread_ticks; /* # of timer ticks since last yield. */
    If true, use multi-level feedback queue scheduler.
    Controlled by kernel command-line option "-o mlfqs". */
 bool thread_mlfqs;
+
+/* std in/out file pointer */
+static struct file *std_in;
+static struct file *std_out;
 
 static void kernel_thread(thread_func *, void *aux);
 
@@ -154,10 +159,15 @@ void thread_init(void) {
 /* Starts preemptive thread scheduling by enabling interrupts.
    Also creates the idle thread. */
 void thread_start(void) {
-  /* main 스레드 fd table 초기화 */
+  /* 표준 입출력 전용 메모리 할당(userprog에서 추가) */
+  std_in = init_std();
+  std_out = init_std();
+  /* main 스레드 fd table 초기화(userprog에서 추가) */
   initial_thread->fd_table = (struct file **)calloc(MAX_FILES, sizeof(struct file *));
   if (!initial_thread->fd_table) thread_exit();  // 메모리 할당 실패 시
-  initial_thread->fd_max = 1;                    // 0,1은 예약 이므로
+  initial_thread->fd_table[0] = std_in;
+  initial_thread->fd_table[1] = std_out;
+  initial_thread->fd_max = 1;  // 0,1은 예약 이므로
   initial_thread->fd_size = MAX_FILES;
 
   /* Create the idle thread. */
@@ -225,12 +235,12 @@ tid_t thread_create(const char *name, int priority, thread_func *function, void 
   tid = t->tid = allocate_tid();
 
   struct thread *curr = thread_current();
-  /* child_info 용 필드 초기화 */
+  /* child_info 용 필드 초기화 (userprog에서 추가)*/
   list_init(&t->child_list);
   lock_init(&t->children_lock);
   t->parent_tid = curr->tid;
 
-  /* child_info 만들어서 부모에게 붙이기 */
+  /* child_info 만들어서 부모에게 붙이기 (userprog에서 추가)*/
   struct child_info *child = (struct child_info *)malloc(sizeof(struct child_info));
   if (!child) {  //할당에 실패했을 경우
     palloc_free_page(t);
@@ -245,13 +255,17 @@ tid_t thread_create(const char *name, int priority, thread_func *function, void 
   lock_acquire(&curr->children_lock);
   list_push_back(&curr->child_list, &child->child_elem);  //부모 child_list에 child_elem을 push
   lock_release(&curr->children_lock);
+
+  /* fd table 생성 (userprog에서 추가)*/
   t->fd_table = (struct file **)calloc(curr->fd_size, sizeof(struct file *));
   if (t->fd_table == NULL) {  // calloc 실패 시
     palloc_free_page(t);
     free(child);
     return TID_ERROR;
   }
-  t->fd_max = 1;  // 0,1은 예약 이므로
+  t->fd_table[0] = std_in;   // 표준 입력
+  t->fd_table[1] = std_out;  // 표준 출력
+  t->fd_max = 1;             // 0,1은 예약 이므로
   t->fd_size = curr->fd_size;
 
   if (thread_mlfqs) {  // mlfqs일 경우
@@ -855,4 +869,22 @@ struct thread *thread_get_by_tid(tid_t tid) {
   }
   lock_release(&all_list_lock);
   return NULL;
+}
+/* userprog에서 추가*/
+struct file *init_std() {
+  struct file *new_file = (struct file *)malloc(sizeof(struct file));
+  if (!new_file) return NULL;
+  /* 내부 필드 채우기 크게 의미 없음*/
+  new_file->deny_write = false;
+  new_file->inode = NULL;
+  new_file->pos = 0;
+  return new_file;
+}
+/* userprog에서 추가*/
+struct file *get_std_in() {
+  return std_in;
+}
+/* userprog에서 추가*/
+struct file *get_std_out() {
+  return std_out;
 }

@@ -14,6 +14,7 @@ struct file *file_open(struct inode *inode) {
     file->inode = inode;
     file->pos = 0;
     file->deny_write = false;
+    file->dup_count = 1;  // 기본 값 1 초기화
     return file;
   } else {
     inode_close(inode);

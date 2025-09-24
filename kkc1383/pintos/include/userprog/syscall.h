@@ -7,5 +7,6 @@ typedef int pid_t;
 
 void syscall_init(void);
 void system_exit(int status);
+void system_close(int fd);
 
 #endif /* userprog/syscall.h */

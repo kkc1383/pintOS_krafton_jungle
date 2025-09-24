@@ -27,6 +27,7 @@
         "streambuf": "c",
         "*.inc": "c",
         "syscall.h": "c",
-        "stdbool.h": "c"
+        "stdbool.h": "c",
+        "file.h": "c"
     }
 }
