@@ -154,6 +154,12 @@ void thread_init(void) {
 /* Starts preemptive thread scheduling by enabling interrupts.
    Also creates the idle thread. */
 void thread_start(void) {
+  /* main 스레드 fd table 초기화 */
+  initial_thread->fd_table = (struct file **)calloc(MAX_FILES, sizeof(struct file *));
+  if (!initial_thread->fd_table) thread_exit();  // 메모리 할당 실패 시
+  initial_thread->fd_max = 1;                    // 0,1은 예약 이므로
+  initial_thread->fd_size = MAX_FILES;
+
   /* Create the idle thread. */
   struct semaphore idle_started;
   sema_init(&idle_started, 0);
@@ -238,6 +244,15 @@ tid_t thread_create(const char *name, int priority, thread_func *function, void 
   lock_acquire(&curr->children_lock);
   list_push_back(&curr->child_list, &child->child_elem);  //부모 child_list에 child_elem을 push
   lock_release(&curr->children_lock);
+
+  t->fd_table = (struct file **)calloc(MAX_FILES, sizeof(struct file *));
+  if (!t->fd_table) {  // calloc 실패 시
+    palloc_free_page(t);
+    free(child);
+    return TID_ERROR;
+  }
+  t->fd_max = 1;  // 0,1은 예약 이므로
+  t->fd_size = MAX_FILES;
 
   if (thread_mlfqs) {  // mlfqs일 경우
     struct thread *parent = thread_current();
